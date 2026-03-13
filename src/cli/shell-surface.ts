@@ -12,15 +12,17 @@ import {
 } from "./shell-transcript";
 
 const SHELL_STREAM_DELAY_MS = 18;
-const SHELL_WAIT_FRAME_MS = 90;
+const SHELL_WAIT_FRAME_MS = 250;
 const DEFAULT_SHELL_PROMPT = "paw> ";
-const WAITING_FRAMES = ["●", "◦", "•", "◦"];
+const WAITING_FRAMES = ["[U.  ]", "[ U. ]", "[  U.]", "[ U. ]"];
 const ANSI_CLEAR_LINE = "\r\u001b[2K";
 const ANSI_CLEAR_SCREEN = "\u001b[2J\u001b[H";
 const ANSI_ALT_SCREEN_ON = "\u001b[?1049h";
 const ANSI_ALT_SCREEN_OFF = "\u001b[?1049l";
 const ANSI_HIDE_CURSOR = "\u001b[?25l";
 const ANSI_SHOW_CURSOR = "\u001b[?25h";
+const ANSI_MOUSE_TRACKING_ON = "";
+const ANSI_MOUSE_TRACKING_OFF = "";
 const DEFAULT_TUI_COLUMNS = 80;
 const DEFAULT_TUI_ROWS = 24;
 const ANSI_ESCAPE = String.fromCharCode(27);
@@ -67,7 +69,9 @@ export class ReadlineShellTerminal implements ShellTerminal {
 export interface ShellSurface {
   readonly supportsColor?: boolean;
   beginShell(displayName: string): void;
+  close(): Promise<void> | void;
   prompt(): Promise<string>;
+  seedTranscript?(entries: ShellSurfaceEntryInput[]): void;
   renderCompanionCard(text: string): void;
   renderCompanionLine(text: string): void;
   showWaitingIndicator(label: string, text: string): void;
@@ -196,6 +200,13 @@ function tokenizeComposerInput(value: string): string[] {
     if (remaining.startsWith("\u001b[3~")) {
       tokens.push("\u001b[3~");
       index += 4;
+      continue;
+    }
+
+    const mouseMatch = remaining.match(/^\u001b\[<[0-9;]+[mM]/);
+    if (mouseMatch) {
+      tokens.push(mouseMatch[0] as string);
+      index += (mouseMatch[0] as string).length;
       continue;
     }
 
@@ -396,6 +407,7 @@ export class TuiShellSurface implements ShellSurface {
   private activePromptLabel = DEFAULT_SHELL_PROMPT;
   private composerBuffer = "";
   private composerCursor = 0;
+  private transcriptScrollOffset = 0;
   private displayName = "PawMemo";
   private introText =
     "Talk to me naturally. If adding a word feels uncertain, I'll ask before I save it.";
@@ -408,11 +420,24 @@ export class TuiShellSurface implements ShellSurface {
     });
   }
 
+  seedTranscript(entries: ShellSurfaceEntryInput[]): void {
+    for (const entry of entries) {
+      this.transcript.appendCommittedCell(
+        entry.kind,
+        entry.text,
+        entry.dataKind,
+        entry.study
+      );
+    }
+    this.transcriptScrollOffset = 0;
+    this.renderFrame();
+  }
+
   beginShell(displayName: string): void {
     this.displayName = displayName;
     this.active = true;
     this.terminal.writeRaw?.(
-      `${ANSI_ALT_SCREEN_ON}${ANSI_HIDE_CURSOR}${ANSI_CLEAR_SCREEN}`
+      `${ANSI_ALT_SCREEN_ON}${ANSI_MOUSE_TRACKING_ON}${ANSI_HIDE_CURSOR}${ANSI_CLEAR_SCREEN}`
     );
     this.renderFrame();
   }
@@ -539,7 +564,7 @@ export class TuiShellSurface implements ShellSurface {
   close(): Promise<void> | void {
     this.clearWaitingIndicator();
     if (this.active) {
-      this.terminal.writeRaw?.(`${ANSI_SHOW_CURSOR}${ANSI_ALT_SCREEN_OFF}`);
+      this.terminal.writeRaw?.(`${ANSI_SHOW_CURSOR}${ANSI_MOUSE_TRACKING_OFF}${ANSI_ALT_SCREEN_OFF}`);
       this.active = false;
     }
     return this.terminal.close();
@@ -552,6 +577,7 @@ export class TuiShellSurface implements ShellSurface {
       entry.dataKind,
       entry.study
     );
+    this.transcriptScrollOffset = 0;
     this.renderFrame();
   }
 
@@ -587,12 +613,79 @@ export class TuiShellSurface implements ShellSurface {
     stdin.setRawMode?.(true);
     stdin.resume();
 
+    let streamBuffer = "";
+
     return await new Promise<string>((resolve) => {
       const onData = (chunk: Buffer | string): void => {
-        const value = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-        const tokens = tokenizeComposerInput(value);
+        streamBuffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
 
-        for (const token of tokens) {
+        // Continuously extract complete tokens from the streamBuffer
+        while (streamBuffer.length > 0) {
+          // 1. Check for complete or partial escape sequences
+          if (streamBuffer.startsWith("\u001b")) {
+            // Known complete sequences
+            if (streamBuffer.startsWith("\u001b[3~")) {
+              this.deleteAfterCursor();
+              streamBuffer = streamBuffer.slice(4);
+              continue;
+            }
+
+            const mouseMatch = streamBuffer.match(/^\u001b\[<([0-9;]+)[mM]/);
+            if (mouseMatch) {
+              const fullMatch = mouseMatch[0] as string;
+              if (fullMatch.startsWith("\u001b[<64;")) {
+                this.scrollTranscriptUp();
+              } else if (fullMatch.startsWith("\u001b[<65;")) {
+                this.scrollTranscriptDown();
+              }
+              // Ignore other mouse clicks or drags
+              streamBuffer = streamBuffer.slice(fullMatch.length);
+              continue;
+            }
+
+            const csiMatch = streamBuffer.match(/^\u001b\[[0-9;]*[a-zA-Z]/);
+            if (csiMatch) {
+                const fullMatch = csiMatch[0] as string;
+                switch (fullMatch) {
+                    case "\u001b[D": this.moveCursorLeft(); break;
+                    case "\u001b[C": this.moveCursorRight(); break;
+                    case "\u001b[H": this.moveCursorHome(); break;
+                    case "\u001b[F": this.moveCursorEnd(); break;
+                    case "\u001b[5~": this.scrollTranscriptUp(10); break;
+                    case "\u001b[6~": this.scrollTranscriptDown(10); break;
+                    case "\u001b[A": this.scrollTranscriptUp(1); break;
+                    case "\u001b[B": this.scrollTranscriptDown(1); break;
+                }
+                streamBuffer = streamBuffer.slice(fullMatch.length);
+                continue;
+            }
+
+            const ss3Match = streamBuffer.match(/^\u001bO[a-zA-Z]/);
+            if (ss3Match) {
+                const fullMatch = ss3Match[0] as string;
+                switch (fullMatch) {
+                    case "\u001bOH": this.moveCursorHome(); break;
+                    case "\u001bOF": this.moveCursorEnd(); break;
+                }
+                streamBuffer = streamBuffer.slice(fullMatch.length);
+                continue;
+            }
+
+            // If it starts with ESC but doesn't match a complete sequence,
+            // we must wait for more data to arrive in the next chunk.
+            // If the buffer is getting too long (e.g. garbage), flush it.
+            if (streamBuffer.length < 16) {
+                break;
+            } else {
+                streamBuffer = streamBuffer.slice(1);
+                continue;
+            }
+          }
+
+          // 2. Process regular characters
+          const token = streamBuffer[0] as string;
+          streamBuffer = streamBuffer.slice(1);
+
           switch (token) {
             case "\r":
             case "\n": {
@@ -600,6 +693,7 @@ export class TuiShellSurface implements ShellSurface {
               const submitted = this.composerBuffer;
               this.composerBuffer = "";
               this.composerCursor = 0;
+              this.transcriptScrollOffset = 0;
               this.renderFrame();
               resolve(submitted);
               return;
@@ -608,6 +702,7 @@ export class TuiShellSurface implements ShellSurface {
               cleanup();
               this.composerBuffer = "/quit";
               this.composerCursor = 0;
+              this.transcriptScrollOffset = 0;
               this.renderFrame();
               resolve("/quit");
               return;
@@ -617,33 +712,12 @@ export class TuiShellSurface implements ShellSurface {
               this.deleteBeforeCursor();
               break;
             }
-            case "\u001b[D": {
-              this.moveCursorLeft();
-              break;
-            }
-            case "\u001b[C": {
-              this.moveCursorRight();
-              break;
-            }
-            case "\u001b[H":
-            case "\u001bOH": {
-              this.moveCursorHome();
-              break;
-            }
-            case "\u001b[F":
-            case "\u001bOF": {
-              this.moveCursorEnd();
-              break;
-            }
-            case "\u001b[3~": {
-              this.deleteAfterCursor();
-              break;
+            case "\u001b": {
+                // This shouldn't happen in the loop because we check startsWithESC above,
+                // but if an ESC is stuck, skip it to avoid breaking the input.
+                break;
             }
             default: {
-              if (token.startsWith("\u001b")) {
-                break;
-              }
-
               this.insertAtCursor(token);
             }
           }
@@ -666,6 +740,7 @@ export class TuiShellSurface implements ShellSurface {
 
     this.composerBuffer = `${this.composerBuffer.slice(0, this.composerCursor)}${text}${this.composerBuffer.slice(this.composerCursor)}`;
     this.composerCursor += text.length;
+    this.transcriptScrollOffset = 0;
     this.renderFrame();
   }
 
@@ -685,6 +760,16 @@ export class TuiShellSurface implements ShellSurface {
     }
 
     this.composerBuffer = `${this.composerBuffer.slice(0, this.composerCursor)}${this.composerBuffer.slice(this.composerCursor + 1)}`;
+    this.renderFrame();
+  }
+
+  private scrollTranscriptUp(count = 3): void {
+    this.transcriptScrollOffset += count;
+    this.renderFrame();
+  }
+
+  private scrollTranscriptDown(count = 3): void {
+    this.transcriptScrollOffset = Math.max(0, this.transcriptScrollOffset - count);
     this.renderFrame();
   }
 
@@ -727,7 +812,7 @@ export class TuiShellSurface implements ShellSurface {
     const tipLines = this.renderTip(columns);
     const statusHeight = 1;
     const composerLines = this.renderComposer(columns);
-    const footerLines = this.renderFooter(columns);
+    const footerLines = this.renderFooter();
     const occupiedHeight =
       headerLines.length +
       tipLines.length +
@@ -760,7 +845,7 @@ export class TuiShellSurface implements ShellSurface {
   private renderTranscript(columns: number, height: number): string[] {
     const snapshot = this.transcript.snapshot();
     const rendered = snapshot.committedCells.flatMap((cell) =>
-      this.renderCellLines(cell, columns - 4)
+      this.renderCellLines(cell, columns)
     );
 
     if (snapshot.activeCell && snapshot.activeCell.text.trim().length > 0) {
@@ -768,7 +853,7 @@ export class TuiShellSurface implements ShellSurface {
         id: 0,
         kind: snapshot.activeCell.kind,
         text: snapshot.activeCell.text
-      }, columns - 4));
+      }, columns));
     }
 
     if (rendered.length === 0) {
@@ -776,28 +861,30 @@ export class TuiShellSurface implements ShellSurface {
         this.theme.muted(
           this.fitLine(
             "No messages yet. Start with a word, a question, /review, or /rescue.",
-            Math.max(12, columns - 6)
+            columns
           )
         )
       );
     }
 
-    const innerHeight = Math.max(1, height - 2);
-    const tail = rendered.slice(Math.max(0, rendered.length - innerHeight));
+    const innerHeight = Math.max(1, height);
+    const maxScroll = Math.max(0, rendered.length - innerHeight);
+    this.transcriptScrollOffset = Math.max(0, Math.min(this.transcriptScrollOffset, maxScroll));
+
+    const endIndex = rendered.length - this.transcriptScrollOffset;
+    const startIndex = Math.max(0, endIndex - innerHeight);
+    const tail = rendered.slice(startIndex, endIndex);
+
     const padding = Array.from(
       { length: Math.max(0, innerHeight - tail.length) },
       () => ""
     );
 
-    return this.renderPanel(
-      columns,
-      "Transcript",
-      [...padding, ...tail]
-    );
+    return [...tail, ...padding];
   }
 
   private renderCellLines(entry: ShellTranscriptCell, columns: number): string[] {
-    const maxWidth = Math.max(12, columns - 2);
+    const maxWidth = Math.max(12, columns);
     const sourceLines = entry.text.split("\n");
     const output: string[] = [];
 
@@ -809,24 +896,43 @@ export class TuiShellSurface implements ShellSurface {
           case "companion-card":
             output.push(
               sourceIndex === 0 && wrappedIndex === 0
-                ? this.theme.heading(line)
-                : line
+                ? `${this.theme.heading("•")} ${this.theme.heading(line)}`
+                : `  ${line}`
             );
             break;
           case "companion-line":
-            output.push(this.theme.companionLine(line));
+            output.push(
+              sourceIndex === 0 && wrappedIndex === 0
+                ? `${this.theme.companionLine("•")} ${this.theme.companionLine(line)}`
+                : `  ${this.theme.companionLine(line)}`
+            );
             break;
           case "assistant":
-            output.push(line);
+            output.push(
+              sourceIndex === 0 && wrappedIndex === 0
+                ? `${this.theme.status("•")} ${line}`
+                : `  ${line}`
+            );
+            break;
+          case "user-line":
+            output.push(
+              sourceIndex === 0 && wrappedIndex === 0
+                ? `${this.theme.prompt("›")} ${line}`
+                : `  ${line}`
+            );
             break;
           case "help":
-            output.push(this.theme.muted(line));
+            output.push(
+                sourceIndex === 0 && wrappedIndex === 0
+                  ? `${this.theme.muted("?")} ${this.theme.muted(line)}`
+                  : `  ${this.theme.muted(line)}`
+            );
             break;
           case "data":
             output.push(
-              entry.study
-                ? this.renderStudyLine(entry.study, line, sourceIndex, wrappedIndex)
-                : line
+              sourceIndex === 0 && wrappedIndex === 0
+                ? (entry.study ? this.renderStudyLine(entry.study, line, sourceIndex, wrappedIndex) : `  ${line}`)
+                : `  ${line}`
             );
             break;
         }
@@ -846,13 +952,9 @@ export class TuiShellSurface implements ShellSurface {
       );
     }
 
-    const elapsed = this.waitingSince === null
-      ? ""
-      : `  ${((Date.now() - this.waitingSince) / 1000).toFixed(1)}s`;
-
     return this.theme.status(
       this.fitLine(
-        `Status  ${WAITING_FRAMES[this.waitingFrame] ?? "•"} ${this.waitingLabel ?? "PawMemo"}  ${this.waitingText}${elapsed}`,
+        `Status  ${WAITING_FRAMES[this.waitingFrame] ?? "•"} ${this.waitingLabel ?? "PawMemo"}  ${this.waitingText}`,
         columns
       )
     );
@@ -869,21 +971,23 @@ export class TuiShellSurface implements ShellSurface {
     switch (study.kind) {
       case "review-intro":
       case "rescue-intro":
-        return isFirstLine ? this.theme.heading(line) : this.theme.muted(line);
+        return isFirstLine
+          ? `${this.theme.status("•")} ${this.theme.heading(line)}`
+          : `  ${this.theme.muted(line)}`;
       case "review-card":
         if (isFirstLine) {
-          return this.theme.status(line);
+          return `${this.theme.status("•")} ${this.theme.status(line)}`;
         }
 
         if (study.emphasis && line.includes(study.emphasis)) {
-          return this.theme.prompt(line);
+          return `  ${this.theme.prompt(line)}`;
         }
 
-        return line;
+        return `  ${line}`;
       case "review-summary":
-        return isFirstLine ? this.theme.heading(line) : line;
+        return isFirstLine ? `${this.theme.status("•")} ${this.theme.heading(line)}` : `  ${line}`;
       default:
-        return line;
+        return isFirstLine ? `${this.theme.status("•")} ${line}` : `  ${line}`;
     }
   }
 
@@ -928,52 +1032,35 @@ export class TuiShellSurface implements ShellSurface {
   }
 
   private renderComposer(columns: number): string[] {
-    const composerWidth = Math.max(12, columns - 6);
-    const composerLine = this.renderComposerInput(composerWidth);
-    return this.renderPanel(columns, "Composer", [
+    const composerLine = this.renderComposerInput(columns);
+    return [
+      this.theme.muted("─".repeat(columns)),
       this.theme.muted(
         this.fitLine(
-          "Enter to send. /quit to leave. Arrows move, Backspace/Delete edit, Home/End jump.",
-          composerWidth
+          "Enter to send  ·  /quit to leave",
+          columns
         )
       ),
       composerLine
-    ]);
+    ];
   }
 
   private renderHeader(columns: number): string[] {
-    const innerWidth = Math.max(12, columns - 6);
-    const cwd = process.cwd().replace(process.env.HOME ?? "", "~");
-
-    return this.renderPanel(columns, undefined, [
+    return [
       this.theme.heading(`PawMemo Shell (${this.displayName})`),
       this.theme.muted(
-        this.fitLine("conversation-first companion  experimental TUI preview", innerWidth)
+        this.fitLine("conversation-first companion", columns)
       ),
-      this.fitLine(`directory: ${cwd}`, innerWidth),
-      this.fitLine("surface: transcript + status + composer", innerWidth)
-    ]);
+      ""
+    ];
   }
 
   private renderTip(columns: number): string[] {
-    return [
-      this.fitLine(
-        "Tip: start with natural chat, /review for a lap, or /rescue to pull one important word back first.",
-        columns
-      )
-    ];
+    return [];
   }
 
-  private renderFooter(columns: number): string[] {
-    const cwd = process.cwd().replace(process.env.HOME ?? "", "~");
-    return [
-      this.theme.muted(
-        this.fitLine(
-          `${this.displayName}  ·  ${this.transcript.snapshot().committedCells.length} cells  ·  ${this.composerBuffer.length} chars  ·  ${cwd}`,
-          columns
-        )
-      )
-    ];
+  private renderFooter(): string[] {
+    return [];
   }
 
   private renderComposerInput(columns: number): string {
@@ -1005,25 +1092,7 @@ export class TuiShellSurface implements ShellSurface {
     return `…${out}`;
   }
 
-  private renderPanel(
-    columns: number,
-    title: string | undefined,
-    contentLines: string[]
-  ): string[] {
-    const innerWidth = Math.max(12, columns - 4);
-    const topBorderBase = title
-      ? `┌─ ${title} ${"─".repeat(Math.max(0, innerWidth - visibleDisplayWidth(title) - 3))}┐`
-      : `┌${"─".repeat(innerWidth + 2)}┐`;
-    const topBorder = this.theme.muted(topBorderBase);
-    const bottomBorder = this.theme.muted(`└${"─".repeat(innerWidth + 2)}┘`);
 
-    const body = contentLines.map((line) => {
-      const padding = Math.max(0, innerWidth - visibleDisplayWidth(line));
-      return `${this.theme.muted("│")} ${line}${" ".repeat(padding)} ${this.theme.muted("│")}`;
-    });
-
-    return [topBorder, ...body, bottomBorder];
-  }
 
   private fitLine(text: string, columns: number): string {
     if (stringDisplayWidth(text) <= columns) {

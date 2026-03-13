@@ -178,7 +178,7 @@ test("ShellRunner reuses capture flow and updates companion output", async () =>
       "expected companion line to mention the captured word"
     );
     assert.ok(
-      terminal.writes.some((line) => line.includes("Momo · loyal · U")),
+      terminal.writes.some((line) => line.includes("U•ᴥ•U")),
       "expected shell to use compact companion presence lines"
     );
 
@@ -228,7 +228,7 @@ test("ShellRunner can render with a romance-coded companion pack", async () => {
       "expected romance-coded pack line to appear"
     );
     assert.ok(
-      terminal.writes.some((line) => line.includes("Airi · teasing")),
+      terminal.writes.some((line) => line.includes("(¬_¬)")),
       "expected compact pack header inside the shell transcript"
     );
   } finally {

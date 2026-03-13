@@ -156,6 +156,12 @@ export class ShellRunner {
   }
 
   async run(): Promise<void> {
+    const historicalTurns = this.conversationSession.listRecentGlobal(20);
+    this.surface.seedTranscript?.(historicalTurns.map((turn) => ({
+      kind: turn.speaker === "user" ? "user-line" : "assistant",
+      text: turn.contentText
+    })));
+
     this.surface.beginShell(this.activePack.displayName);
 
     try {
@@ -322,7 +328,7 @@ export class ShellRunner {
     );
     this.surface.showWaitingIndicator(
       this.activePack.displayName,
-      reaction.lineOverride ?? "Hold on. I'm lining up the next step."
+      reaction.lineOverride ?? "Sniffing around..."
     );
     this.shellState.frame += 1;
   }

@@ -127,6 +127,10 @@ export class ShellConversationSession {
     return limit > 0 ? turns.slice(-limit) : turns;
   }
 
+  listRecentGlobal(limit = 20) {
+    return this.turns.listRecent(limit);
+  }
+
   recordActionResult(
     text: string,
     payloadJson: string | null = null,

@@ -145,9 +145,8 @@ export function renderCompanionPresenceLine(
   pack: CompanionPackDefinition,
   snapshot: CompanionSnapshot
 ): string {
-  const headerLabel = pack.styleLabel ?? pack.archetype ?? snapshot.mood;
   const avatar = renderCompanionAvatar(pack, snapshot);
-  return `${pack.displayName} · ${headerLabel} · ${avatar}  ${defaultLine(pack, snapshot)}`;
+  return `${avatar}  ${defaultLine(pack, snapshot)}`;
 }
 
 export function renderCompanionCard(

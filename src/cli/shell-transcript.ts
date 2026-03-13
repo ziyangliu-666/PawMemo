@@ -4,6 +4,7 @@ import type { CliDataKind } from "./theme";
 export type ShellTranscriptCellKind =
   | "companion-card"
   | "companion-line"
+  | "user-line"
   | "assistant"
   | "help"
   | "data"

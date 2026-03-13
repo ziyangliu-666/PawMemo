@@ -99,6 +99,27 @@ export class ConversationTurnRepository {
     return rows.map(mapTurn);
   }
 
+  listRecent(limit: number): ConversationTurnRecord[] {
+    const rows = this.db.prepare(
+      `
+        SELECT
+          id,
+          session_id,
+          turn_index,
+          speaker,
+          kind,
+          content_text,
+          payload_json,
+          created_at
+        FROM conversation_turns
+        ORDER BY created_at DESC, turn_index DESC
+        LIMIT ?
+      `
+    ).all(limit) as Record<string, unknown>[];
+
+    return rows.reverse().map(mapTurn);
+  }
+
   private getById(id: number): ConversationTurnRecord {
     const row = this.db.prepare(
       `

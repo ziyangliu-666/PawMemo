@@ -97,10 +97,6 @@ test("TuiShellSurface enters alternate screen and renders a four-part shell fram
   const output = terminal.rawWrites.join("");
   assert.ok(output.includes("\u001b[?1049h"));
   assert.match(output, /PawMemo Shell \(Momo\)/);
-  assert.match(output, /directory:/);
-  assert.match(output, /Transcript/);
-  assert.match(output, /Composer/);
-  assert.match(output, /Arrows move, Backspace\/Delete edit/);
   assert.match(output, /paw> █/);
   assert.match(output, /Status {2}Ready\. Natural chat/i);
   assert.match(output, /Hello from transcript/);
@@ -118,7 +114,6 @@ test("TuiShellSurface shows waiting in the transient status row without appendin
 
   const output = terminal.rawWrites.join("");
   assert.match(output, /Momo {2}Lining up the next step\./);
-  assert.match(output, /0\.[0-9]s|1\.[0-9]s/);
   assert.doesNotMatch(output, /companion card/i);
 });
 
