@@ -1,7 +1,7 @@
 # PawMemo
 
 <p align="center">
-  <img src="./assets/readme/logo.png" alt="PawMemo logo" width="720">
+  <img src="./assets/readme/logo.png" alt="PawMemo logo" width="600">
 </p>
 
 LLM-native vocabulary companion for the terminal.
@@ -160,6 +160,8 @@ pawmemo pet --pack tsundere
 
 ## Architecture
 
+![PawMemo architecture overview](./assets/readme/structure.png)
+
 PawMemo is structured around one local study engine that both the shell and direct CLI commands use.
 
 The core architecture today is:
@@ -183,67 +185,6 @@ More precise wording:
 - it is claiming the current scheduler is PawMemo's own explicit implementation, designed in an FSRS-style direction rather than as ad hoc cooldown timers
 - companion packs can change tone, copy, and presentation, but they do not change review scheduling or canonical study state
 
-Layered architecture overview:
-
-![PawMemo architecture overview](./assets/readme/structure.png)
-
-```mermaid
-graph TD
-    subgraph Surface["Surface Layer"]
-        TUI["TUI Shell"]
-        LINE["Line Shell"]
-        CLI["CLI Commands"]
-    end
-
-    subgraph App["Application Layer"]
-        STUDY["StudyServices"]
-        EXEC["ShellActionExecutor"]
-    end
-
-    subgraph Learning["Learning Core"]
-        CAP["Capture"]
-        ASK["Ask / Teach"]
-        REVIEW["Review Service"]
-        SESSION["Review Session"]
-        SCHED["Scheduler"]
-        CARDS["Card Builder"]
-    end
-
-    subgraph Companion["Companion Layer"]
-        SIGNALS["Companion Signals"]
-        PACKS["Companion Packs"]
-        RENDER["Companion Renderer"]
-    end
-
-    subgraph Infra["Infrastructure"]
-        DB["SQLite"]
-        LLM["LLM Providers"]
-    end
-
-    TUI --> EXEC
-    LINE --> EXEC
-    CLI --> STUDY
-    EXEC --> STUDY
-    TUI --> RENDER
-
-    STUDY --> CAP
-    STUDY --> ASK
-    STUDY --> REVIEW
-    STUDY --> SIGNALS
-
-    REVIEW --> SESSION
-    SESSION --> SCHED
-    CAP --> CARDS
-
-    CAP --> DB
-    CARDS --> DB
-    SESSION --> DB
-    SIGNALS --> DB
-    ASK --> LLM
-
-    SIGNALS --> RENDER
-    PACKS --> RENDER
-```
 
 ## Development
 
