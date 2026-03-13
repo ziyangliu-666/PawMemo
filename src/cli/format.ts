@@ -218,7 +218,9 @@ export function formatAskResult(result: AskWordResult): string {
     `Word: ${result.word}`,
     `Gloss: ${result.gloss}`,
     `Explanation: ${result.explanation}`,
+    `Highlights: ${result.highlights.length > 0 ? result.highlights.join(" | ") : "none"}`,
     `Usage note: ${result.usageNote}`,
+    `Example: ${result.example}`,
     `Confidence: ${result.confidenceNote}`,
     `Known state: ${result.knownState ?? "new to PawMemo"}`,
     `Retrieved gloss: ${result.retrievedGloss ?? "none"}`,
@@ -250,6 +252,7 @@ export function formatLlmStatus(summary: LlmStatusSummary): string {
     );
   }
 
+  lines.push("Use: /models [provider]");
   lines.push("Use: /model");
   lines.push("Use: /model list [provider]");
   lines.push("Use: /model use <provider> [model] [--api-key KEY] [--api-url URL]");

@@ -12,6 +12,7 @@ import type {
   RescueCandidateResult,
   ReviewQueueResult,
   ReviewRevealResult,
+  TeachWordDraftResult,
   TeachWordInput,
   TeachWordResult
 } from "../core/domain/models";
@@ -36,6 +37,7 @@ import {
   buildReturnAfterGapSummary,
   type ReturnAfterGapSummary
 } from "./review-session-feedback";
+import type { TeachPerfHook } from "../core/orchestration/teach-word";
 
 export interface ExecutedReviewSession {
   result: ReviewSessionRunResult;
@@ -67,12 +69,35 @@ export class ShellActionExecutor {
     return this.study.capture(input);
   }
 
-  ask(input: AskWordInput): Promise<AskWordResult> {
-    return this.study.ask(input);
+  ask(
+    input: AskWordInput,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<AskWordResult> {
+    return this.study.ask(input, options);
   }
 
-  teach(input: TeachWordInput): Promise<TeachWordResult> {
-    return this.study.teach(input);
+  teach(
+    input: TeachWordInput,
+    perfHook?: TeachPerfHook,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<TeachWordResult> {
+    return this.study.teach(input, perfHook, options);
+  }
+
+  draftTeach(
+    input: TeachWordInput,
+    perfHook?: TeachPerfHook,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<TeachWordDraftResult> {
+    return this.study.draftTeach(input, perfHook, options);
+  }
+
+  confirmTeachDraft(
+    input: TeachWordInput,
+    draft: TeachWordDraftResult,
+    perfHook?: TeachPerfHook
+  ): TeachWordResult {
+    return this.study.confirmTeachDraft(input, draft, perfHook);
   }
 
   getReviewQueue(input: GetReviewQueueInput = {}): ReviewQueueResult {

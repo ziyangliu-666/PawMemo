@@ -1,12 +1,15 @@
 import { ProviderRequestError } from "../../lib/errors";
 import type { LlmModelInfo } from "../../core/domain/models";
 import { normalizeApiUrl } from "../normalize-api-url";
+import { fetchWithLlmTimeout } from "../fetch-with-timeout";
 import type {
   LlmModelListRequest,
   LlmProvider,
   LlmTextRequest,
-  LlmTextResponse
+  LlmTextResponse,
+  LlmTextStreamRequest
 } from "../types";
+import { collectSseEvents } from "../sse";
 
 interface GeminiTextPart {
   text?: string;
@@ -53,10 +56,11 @@ export class GeminiProvider implements LlmProvider {
     const url = baseUrl
       ? `${baseUrl}/models/${request.model}:generateContent`
       : `https://generativelanguage.googleapis.com/v1beta/models/${request.model}:generateContent`;
-    const response = await fetch(
+    const response = await fetchWithLlmTimeout(
       url,
       {
         method: "POST",
+        signal: request.signal,
         headers: {
           "content-type": "application/json",
           ...(baseUrl
@@ -83,7 +87,8 @@ export class GeminiProvider implements LlmProvider {
             responseMimeType: request.responseMimeType ?? "application/json"
           }
         })
-      }
+      },
+      "Gemini request"
     );
 
     const payload = (await response.json()) as GeminiGenerateContentResponse;
@@ -112,6 +117,85 @@ export class GeminiProvider implements LlmProvider {
     return { text };
   }
 
+  async generateTextStream(
+    request: LlmTextStreamRequest
+  ): Promise<LlmTextResponse> {
+    const baseUrl = getBaseUrl(request.apiUrl);
+    const url = baseUrl
+      ? `${baseUrl}/models/${request.model}:streamGenerateContent?alt=sse`
+      : `https://generativelanguage.googleapis.com/v1beta/models/${request.model}:streamGenerateContent?alt=sse`;
+    const response = await fetchWithLlmTimeout(
+      url,
+      {
+        method: "POST",
+        signal: request.signal,
+        headers: {
+          "content-type": "application/json",
+          ...(baseUrl
+            ? {
+                authorization: `Bearer ${request.apiKey}`,
+                "x-goog-api-key": request.apiKey
+              }
+            : {
+                "x-goog-api-key": request.apiKey
+              })
+        },
+        body: JSON.stringify({
+          system_instruction: {
+            parts: [{ text: request.systemInstruction }]
+          },
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: request.userPrompt }]
+            }
+          ],
+          generationConfig: {
+            temperature: request.temperature ?? 0.2,
+            responseMimeType: request.responseMimeType ?? "application/json"
+          }
+        })
+      },
+      "Gemini request"
+    );
+
+    if (!response.ok) {
+      const payload = (await response.json()) as GeminiGenerateContentResponse;
+      throw new ProviderRequestError(
+        payload.error?.message ?? `Gemini request failed with status ${response.status}.`
+      );
+    }
+
+    let text = "";
+
+    await collectSseEvents(response, async (event) => {
+      const payload = JSON.parse(event.data) as GeminiGenerateContentResponse;
+
+      if (payload.promptFeedback?.blockReason) {
+        throw new ProviderRequestError(
+          `Gemini blocked the request: ${payload.promptFeedback.blockReason}.`
+        );
+      }
+
+      const delta = payload.candidates?.[0]?.content?.parts
+        ?.map((part) => part.text ?? "")
+        .join("");
+
+      if (!delta || delta.length === 0) {
+        return;
+      }
+
+      text += delta;
+      await request.onTextDelta(delta);
+    });
+
+    if (text.trim().length === 0) {
+      throw new ProviderRequestError("Gemini returned an empty response.");
+    }
+
+    return { text: text.trim() };
+  }
+
   async listModels(request: LlmModelListRequest): Promise<LlmModelInfo[]> {
     const models: LlmModelInfo[] = [];
     let nextPageToken: string | null = null;
@@ -132,14 +216,19 @@ export class GeminiProvider implements LlmProvider {
         url.searchParams.set("pageToken", nextPageToken);
       }
 
-      const response = await fetch(url, {
-        headers: baseUrl
-          ? {
-              authorization: `Bearer ${request.apiKey}`,
-              "x-goog-api-key": request.apiKey
-            }
-          : undefined
-      });
+      const response = await fetchWithLlmTimeout(
+        url,
+        {
+          signal: request.signal,
+          headers: baseUrl
+            ? {
+                authorization: `Bearer ${request.apiKey}`,
+                "x-goog-api-key": request.apiKey
+              }
+            : undefined
+        },
+        "Gemini model listing request"
+      );
       const payload = (await response.json()) as GeminiModelPayload;
 
       if (!response.ok) {

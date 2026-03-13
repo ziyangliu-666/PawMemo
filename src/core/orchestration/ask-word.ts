@@ -15,8 +15,11 @@ export class AskWordService {
     this.explanationEngine = new ExplanationEngine(db, providerFactory);
   }
 
-  async ask(input: AskWordInput): Promise<AskWordResult> {
-    const explanation = await this.explanationEngine.explain(input);
+  async ask(
+    input: AskWordInput,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<AskWordResult> {
+    const explanation = await this.explanationEngine.explain(input, options);
     return toAskWordResult(explanation);
   }
 }

@@ -10,6 +10,14 @@ import type {
 import { StudyServices } from "../core/orchestration/study-services";
 import type { SqliteDatabase } from "../storage/sqlite/database";
 import type { StudyCellIntent } from "./transcript-intent";
+import {
+  appendStudyCardSections,
+  createReviewCardBodySections,
+  createReviewMetadataSection,
+  createReviewResultSection,
+  createReviewIntroIntent,
+  createReviewSummaryIntent
+} from "./study-card-view";
 import { createCliTheme, shouldUseColor } from "./theme";
 import type { CliDataKind } from "./theme";
 
@@ -38,6 +46,7 @@ export interface ReviewSessionTerminal {
     kind: CliDataKind,
     intent?: StudyCellIntent
   ): void;
+  select?(request: PromptSelectionRequest): Promise<string>;
   prompt(promptText: string): Promise<string>;
   setMode?(mode: string): void;
   close(): Promise<void> | void;
@@ -55,6 +64,19 @@ export interface ReviewSessionRunResult {
   gradeCounts: Record<ReviewGrade, number>;
 }
 
+export interface PromptSelectionChoice {
+  value: string;
+  label: string;
+  aliases?: string[];
+  description?: string;
+}
+
+export interface PromptSelectionRequest {
+  promptText: string;
+  choices: PromptSelectionChoice[];
+  initialValue?: string;
+}
+
 export interface ReviewSessionCopy {
   sessionHeading(limit?: number): Array<{ text: string; kind: CliDataKind }>;
   noDueCards(reviewedCount: number): { text: string; kind: CliDataKind };
@@ -64,6 +86,7 @@ export interface ReviewSessionCopy {
   showCardMetadata: boolean;
   revealPrompt: string;
   gradePrompt: string;
+  invalidReveal: { text: string; kind: CliDataKind };
   invalidGrade: { text: string; kind: CliDataKind };
   answerLine(answerText: string): string;
   savedGradeResult(result: GradeReviewCardResult): { text: string; kind: CliDataKind };
@@ -116,8 +139,12 @@ function createDefaultReviewSessionCopy(): ReviewSessionCopy {
       return `Card ${index}: #${card.id} (${card.lemma})`;
     },
     showCardMetadata: true,
-    revealPrompt: "Press Enter to reveal, or type q to quit: ",
-    gradePrompt: "Grade [a]gain [h]ard [g]ood [e]asy, or q to quit: ",
+    revealPrompt: "Ready to reveal the answer?",
+    gradePrompt: "How did that feel?",
+    invalidReveal: {
+      text: "Choose reveal or quit so I know whether to show the answer.",
+      kind: "review-session-status-warning"
+    },
     invalidGrade: {
       text: "Please enter again, hard, good, easy, or q.",
       kind: "review-session-status-warning"
@@ -184,6 +211,48 @@ export function createDefaultReviewSessionTerminal(): ReviewSessionTerminal {
   return new ReadlineReviewSessionTerminal();
 }
 
+function formatSelectionChoice(
+  choice: PromptSelectionChoice,
+  request: PromptSelectionRequest
+): string {
+  const alias = choice.aliases?.[0];
+  const prefix = alias ? `[${alias}] ` : "";
+  const suffix = request.initialValue === choice.value ? " (Enter)" : "";
+  const description = choice.description ? ` - ${choice.description}` : "";
+  return `${prefix}${choice.label}${suffix}${description}`;
+}
+
+export function formatPromptSelectionPrompt(
+  request: PromptSelectionRequest
+): string {
+  const choices = request.choices
+    .map((choice) => formatSelectionChoice(choice, request))
+    .join("  ");
+
+  return `${request.promptText} ${choices}: `;
+}
+
+export function resolvePromptSelection(
+  request: PromptSelectionRequest,
+  rawInput: string
+): string | null {
+  const normalized = rawInput.trim().toLowerCase();
+
+  if (normalized.length === 0) {
+    return request.initialValue ?? null;
+  }
+
+  const matched = request.choices.find((choice) => {
+    if (choice.value.toLowerCase() === normalized) {
+      return true;
+    }
+
+    return choice.aliases?.some((alias) => alias.toLowerCase() === normalized) ?? false;
+  });
+
+  return matched?.value ?? null;
+}
+
 function normalizeGrade(value: string): ReviewGrade | null {
   return GRADE_ALIASES[value.trim().toLowerCase()] ?? null;
 }
@@ -191,6 +260,8 @@ function normalizeGrade(value: string): ReviewGrade | null {
 export class ReviewSessionRunner {
   private readonly theme: ReturnType<typeof createCliTheme>;
   private readonly copy: ReviewSessionCopy;
+  private readonly revealSelection: PromptSelectionRequest;
+  private readonly gradeSelection: PromptSelectionRequest;
 
   constructor(
     private readonly services: ReviewSessionServices,
@@ -201,6 +272,53 @@ export class ReviewSessionRunner {
       enabled: this.terminal.supportsColor ?? false
     });
     this.copy = copy;
+    this.revealSelection = {
+      promptText: this.copy.revealPrompt,
+      initialValue: "reveal",
+      choices: [
+        {
+          value: "reveal",
+          label: "Peek answer",
+          aliases: ["p", "peek", "reveal"]
+        },
+        {
+          value: "quit",
+          label: "Pause",
+          aliases: ["q", "quit", "pause"]
+        }
+      ]
+    };
+    this.gradeSelection = {
+      promptText: this.copy.gradePrompt,
+      initialValue: "good",
+      choices: [
+        {
+          value: "again",
+          label: "Again",
+          aliases: ["a", "again"]
+        },
+        {
+          value: "hard",
+          label: "Hard",
+          aliases: ["h", "hard"]
+        },
+        {
+          value: "good",
+          label: "Good",
+          aliases: ["g", "good"]
+        },
+        {
+          value: "easy",
+          label: "Easy",
+          aliases: ["e", "easy"]
+        },
+        {
+          value: "quit",
+          label: "Pause",
+          aliases: ["q", "quit", "pause"]
+        }
+      ]
+    };
   }
 
   static fromDatabase(
@@ -254,14 +372,13 @@ export class ReviewSessionRunner {
       easy: 0
     };
 
-    const introIntent: StudyCellIntent = {
-      kind: "review-intro",
-      title: "review",
-      groupId: "review-session-intro"
-    };
-
-    for (const line of this.copy.sessionHeading(options.limit)) {
-      this.writeDataBlock(line.text, line.kind, introIntent);
+    const introLines = this.copy.sessionHeading(options.limit);
+    if (introLines.length > 0) {
+      this.writeDataBlock(
+        introLines.map((line) => line.text).join("\n"),
+        introLines[0]?.kind ?? "review-session-heading",
+        createReviewIntroIntent(introLines.map((line) => line.text))
+      );
     }
 
     try {
@@ -272,11 +389,11 @@ export class ReviewSessionRunner {
         ) {
           this.terminal.setMode?.("Summary");
           const paused = this.copy.sessionPaused(reviewedCount);
-          this.writeDataBlock(paused.text, paused.kind, {
-            kind: "review-summary",
-            title: "summary",
-            groupId: "review-session-summary"
-          });
+          this.writeDataBlock(
+            paused.text,
+            paused.kind,
+            createReviewSummaryIntent(paused.text, "Paused here")
+          );
 
           return {
             reviewedCount,
@@ -291,11 +408,14 @@ export class ReviewSessionRunner {
         if (!nextCard) {
           this.terminal.setMode?.("Summary");
           const done = this.copy.noDueCards(reviewedCount);
-          this.writeDataBlock(done.text, done.kind, {
-            kind: "review-summary",
-            title: "summary",
-            groupId: "review-session-summary"
-          });
+          this.writeDataBlock(
+            done.text,
+            done.kind,
+            createReviewSummaryIntent(
+              done.text,
+              reviewedCount === 0 ? "All clear" : "Lap complete"
+            )
+          );
 
           return {
             reviewedCount,
@@ -309,46 +429,26 @@ export class ReviewSessionRunner {
         const cardIntent = this.createReviewCardIntent(nextCard.id, reviewedCount + 1);
         this.printCard(nextCard, reviewedCount + 1, cardIntent);
 
-        const revealAction = (await this.terminal.prompt(
-          this.theme.prompt(this.copy.revealPrompt)
-        ))
-          .trim()
-          .toLowerCase();
-
-        if (revealAction === "q" || revealAction === "quit") {
-          this.terminal.setMode?.("Summary");
-          const endedEarly = this.copy.sessionEndedEarly(reviewedCount);
-          this.writeDataBlock(endedEarly.text, endedEarly.kind, {
-            kind: "review-summary",
-            title: "summary"
-          });
-
-          return {
-            reviewedCount,
-            quitEarly: true,
-            limitReached: false,
-            gradeCounts
-          };
-        }
-
-        this.terminal.setMode?.("Reveal");
-        const reveal = this.services.reveal(nextCard.id);
-        this.printReveal(reveal, cardIntent);
-
         while (true) {
-          const gradeInput = await this.terminal.prompt(
-            this.theme.prompt(this.copy.gradePrompt)
-          );
-          const normalized = gradeInput.trim().toLowerCase();
+          const revealAction = await this.readSelection(this.revealSelection);
 
-          if (normalized === "q" || normalized === "quit") {
+          if (revealAction === null) {
+            this.writeDataBlock(
+              this.copy.invalidReveal.text,
+              this.copy.invalidReveal.kind,
+              createReviewSummaryIntent(this.copy.invalidReveal.text, "Need a choice")
+            );
+            continue;
+          }
+
+          if (revealAction === "quit") {
             this.terminal.setMode?.("Summary");
             const endedEarly = this.copy.sessionEndedEarly(reviewedCount);
-            this.writeDataBlock(endedEarly.text, endedEarly.kind, {
-              kind: "review-summary",
-              title: "summary",
-              groupId: "review-session-summary"
-            });
+            this.writeDataBlock(
+              endedEarly.text,
+              endedEarly.kind,
+              createReviewSummaryIntent(endedEarly.text, "Paused here")
+            );
 
             return {
               reviewedCount,
@@ -358,17 +458,40 @@ export class ReviewSessionRunner {
             };
           }
 
-          const grade = normalizeGrade(normalized);
+          break;
+        }
+
+        this.terminal.setMode?.("Reveal");
+        const reveal = this.services.reveal(nextCard.id);
+        this.printReveal(reveal, cardIntent);
+
+        while (true) {
+          const selection = await this.readSelection(this.gradeSelection);
+
+          if (selection === "quit") {
+            this.terminal.setMode?.("Summary");
+            const endedEarly = this.copy.sessionEndedEarly(reviewedCount);
+            this.writeDataBlock(
+              endedEarly.text,
+              endedEarly.kind,
+              createReviewSummaryIntent(endedEarly.text, "Paused here")
+            );
+
+            return {
+              reviewedCount,
+              quitEarly: true,
+              limitReached: false,
+              gradeCounts
+            };
+          }
+
+          const grade = selection ? normalizeGrade(selection) : null;
 
           if (!grade) {
             this.writeDataBlock(
               this.copy.invalidGrade.text,
               this.copy.invalidGrade.kind,
-              {
-                kind: "review-summary",
-                title: "summary",
-                groupId: "review-session-summary"
-              }
+              createReviewSummaryIntent(this.copy.invalidGrade.text, "Need a grade")
             );
             continue;
           }
@@ -385,25 +508,81 @@ export class ReviewSessionRunner {
     }
   }
 
+  private async readSelection(
+    request: PromptSelectionRequest
+  ): Promise<string | null> {
+    if (this.terminal.select) {
+      const selected = await this.terminal.select(request);
+      return resolvePromptSelection(request, selected);
+    }
+
+    const rawInput = await this.terminal.prompt(
+      this.theme.prompt(formatPromptSelectionPrompt(request))
+    );
+    return resolvePromptSelection(request, rawInput);
+  }
+
   private printCard(
     card: DueReviewCard,
     index: number,
     studyIntent: StudyCellIntent
   ): void {
     this.terminal.write("");
-
+    const heading = this.copy.cardHeading(card, index);
+    const cardSections = createReviewCardBodySections(
+      heading,
+      card.lemma,
+      card.cardType,
+      card.promptText
+    );
     this.writeDataBlock(
-      this.copy.cardHeading(card, index),
+      heading,
       "review-card-heading",
-      studyIntent
+      appendStudyCardSections(
+        {
+          kind: "review-card",
+          title: "card",
+          emphasis: studyIntent.emphasis,
+          groupId: studyIntent.groupId
+        },
+        cardSections.slice(0, 2)
+      )
     );
 
     if (this.copy.showCardMetadata) {
-      this.writeDataBlock(`Type: ${card.cardType}`, "review-card-field", studyIntent);
-      this.writeDataBlock(`State: ${card.state}`, "review-card-field", studyIntent);
+      this.writeDataBlock(`Type: ${card.cardType}`, "review-card-field", appendStudyCardSections(
+        {
+          kind: "review-card",
+          title: "card",
+          emphasis: studyIntent.emphasis,
+          groupId: studyIntent.groupId
+        },
+        [createReviewMetadataSection(`Type: ${card.cardType}`)]
+      ));
+      this.writeDataBlock(`State: ${card.state}`, "review-card-field", appendStudyCardSections(
+        {
+          kind: "review-card",
+          title: "card",
+          emphasis: studyIntent.emphasis,
+          groupId: studyIntent.groupId
+        },
+        [createReviewMetadataSection(`State: ${card.state}`)]
+      ));
     }
 
-    this.writeDataBlock(card.promptText, "plain", studyIntent);
+    this.writeDataBlock(
+      card.promptText,
+      "plain",
+      appendStudyCardSections(
+        {
+          kind: "review-card",
+          title: "card",
+          emphasis: studyIntent.emphasis,
+          groupId: studyIntent.groupId
+        },
+        cardSections.slice(2)
+      )
+    );
   }
 
   private printReveal(
@@ -413,26 +592,56 @@ export class ReviewSessionRunner {
     this.writeDataBlock(
       this.copy.answerLine(result.card.answerText),
       "review-card-field",
-      studyIntent
+      appendStudyCardSections(
+        {
+          kind: "review-card",
+          title: "card",
+          emphasis: studyIntent.emphasis,
+          groupId: studyIntent.groupId
+        },
+        [
+          {
+            role: "eyebrow",
+            text: "Answer"
+          },
+          {
+            role: "answer",
+            text: this.copy.answerLine(result.card.answerText)
+          }
+        ]
+      )
     );
   }
 
   private printGradeResult(result: GradeReviewCardResult): void {
     const saved = this.copy.savedGradeResult(result);
-    this.writeDataBlock(saved.text, saved.kind, {
-      kind: "review-summary",
-      title: "summary",
-      groupId: "review-session-summary"
-    });
+    this.writeDataBlock(
+      saved.text,
+      saved.kind,
+      appendStudyCardSections(
+        {
+          kind: "review-summary",
+          title: "summary",
+          groupId: "review-session-summary"
+        },
+        [
+          { role: "title", text: "Saved" },
+          createReviewResultSection(saved.text)
+        ]
+      )
+    );
   }
 
   private createReviewCardIntent(cardId: number, index: number): StudyCellIntent {
-    return {
-      kind: "review-card",
-      title: "card",
-      emphasis: "What we were looking for:",
-      groupId: `review-card-${cardId}-${index}`
-    };
+    return appendStudyCardSections(
+      {
+        kind: "review-card",
+        title: "card",
+        emphasis: "What we were looking for:",
+        groupId: `review-card-${cardId}-${index}`
+      },
+      []
+    );
   }
 
   private writeDataBlock(

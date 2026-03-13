@@ -5,10 +5,18 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  buildShellPlannerPrompt
+} from "../src/llm/shell-planner-prompt";
+import {
   LlmShellPlanner,
   normalizeShellPlannerPayload
 } from "../src/cli/shell-planner";
-import type { LlmProvider, LlmTextRequest, LlmTextResponse } from "../src/llm/types";
+import type {
+  LlmProvider,
+  LlmTextRequest,
+  LlmTextResponse,
+  LlmTextStreamRequest
+} from "../src/llm/types";
 import { openDatabase } from "../src/storage/sqlite/database";
 
 function tempDbPath(name: string): string {
@@ -31,6 +39,25 @@ class FakePlannerProvider implements LlmProvider {
 
   async listModels(): Promise<never[]> {
     return [];
+  }
+}
+
+class FakeStreamingPlannerProvider extends FakePlannerProvider {
+  streamCalls = 0;
+
+  async generateTextStream(
+    request: LlmTextStreamRequest
+  ): Promise<LlmTextResponse> {
+    this.streamCalls += 1;
+    this.lastRequest = request;
+
+    for (const chunk of ['{"kind":"reply","message":"', "你好，", "我是", ' PawMemo。"}']) {
+      await request.onTextDelta(chunk);
+    }
+
+    return {
+      text: '{"kind":"reply","message":"你好，我是 PawMemo。"}'
+    };
   }
 }
 
@@ -121,6 +148,60 @@ test("normalizeShellPlannerPayload rejects reply output without a message", () =
   );
 });
 
+test("buildShellPlannerPrompt layers structured companion prompt fields into planner input", () => {
+  const prompt = buildShellPlannerPrompt({
+    rawInput: "帮我解释 lucid",
+    recentTurns: [
+      {
+        speaker: "user",
+        kind: "message",
+        contentText: "昨天我们在看 lucid",
+        createdAt: "2026-03-13T10:00:00.000Z",
+        payloadJson: null
+      },
+      {
+        speaker: "assistant",
+        kind: "message",
+        contentText: "嗯，把词给我。",
+        createdAt: "2026-03-13T10:00:05.000Z",
+        payloadJson: null
+      }
+    ],
+    activePack: {
+      id: "mina",
+      displayName: "Mina",
+      styleLabel: "warm",
+      romanceMode: "on",
+      description: "A warm study companion.",
+      personality: "Soft and attentive.",
+      scenario: "Already sharing a quiet study nook.",
+      exampleMessages: ["I'm here. We can do this together."],
+      postHistoryInstructions: ["Continue the same ongoing scene after reading recent turns."],
+      toneRules: ["Keep replies gently affectionate.", "Stay concise."],
+      boundaryRules: ["Do not guilt the learner.", "Do not replace study help with romance."],
+      avatarFrames: {},
+      moodLines: {},
+      reactions: {}
+    },
+    statusSignals: {
+      dueCount: 2,
+      recentWord: "lucid"
+    },
+    pendingProposalText: "Do you want me to save lucid first?"
+  });
+
+  assert.match(prompt.systemInstruction, /Companion description: A warm study companion\./);
+  assert.match(prompt.systemInstruction, /Companion personality: Soft and attentive\./);
+  assert.match(prompt.systemInstruction, /Current companion scenario: Already sharing a quiet study nook\./);
+  assert.match(prompt.systemInstruction, /Companion tone rules:/);
+  assert.match(prompt.systemInstruction, /Companion boundary rules:/);
+  assert.match(prompt.systemInstruction, /occasionally end a short reply or clarification with one fitting kaomoji/i);
+  assert.match(prompt.userPrompt, /Post-history instructions:/);
+  assert.match(prompt.userPrompt, /Continue the same ongoing scene/);
+  assert.match(prompt.userPrompt, /Example voice messages:/);
+  assert.match(prompt.userPrompt, /I'm here\. We can do this together\./);
+});
+
 test("LlmShellPlanner uses the provider for chat planning when configured", async () => {
   const dbPath = tempDbPath("shell-planner");
   const db = openDatabase(dbPath);
@@ -141,7 +222,15 @@ test("LlmShellPlanner uses the provider for chat planning when configured", asyn
       activePack: {
         id: "momo",
         displayName: "Momo",
+        styleLabel: "loyal",
         romanceMode: "off",
+        description: "A loyal study dog.",
+        personality: "Calm and eager to help.",
+        scenario: "Already sharing the study nook.",
+        exampleMessages: ["I'm here with the word pile."],
+        postHistoryInstructions: ["Stay in the current scene after reading history."],
+        toneRules: ["Sound warm and steady."],
+        boundaryRules: ["Do not overshadow study help."],
         avatarFrames: {},
         moodLines: {},
         reactions: {}
@@ -158,6 +247,71 @@ test("LlmShellPlanner uses the provider for chat planning when configured", asyn
       message: "我是 PawMemo 的学习 shell。"
     });
     assert.match(provider.lastRequest?.userPrompt ?? "", /Current user input: 这是啥/);
+    assert.match(provider.lastRequest?.systemInstruction ?? "", /Companion description: A loyal study dog\./);
+    assert.match(provider.lastRequest?.userPrompt ?? "", /Example voice messages:/);
+  } finally {
+    if (priorApiKey === undefined) {
+      delete process.env.GEMINI_API_KEY;
+    } else {
+      process.env.GEMINI_API_KEY = priorApiKey;
+    }
+
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
+test("LlmShellPlanner can surface streamed planner message deltas for reply turns", async () => {
+  const dbPath = tempDbPath("shell-planner-stream");
+  const db = openDatabase(dbPath);
+  const priorApiKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = "test-key";
+
+  try {
+    const provider = new FakeStreamingPlannerProvider(
+      '{"kind":"reply","message":"你好，我是 PawMemo。"}'
+    );
+    const planner = new LlmShellPlanner(db, () => provider);
+    const streamed: string[] = [];
+    const result = await planner.plan(
+      {
+        rawInput: "你好",
+        recentTurns: [],
+        activePack: {
+          id: "momo",
+          displayName: "Momo",
+          styleLabel: "loyal",
+          romanceMode: "off",
+          description: "A loyal study dog.",
+          personality: "Calm and eager to help.",
+          scenario: "Already sharing the study nook.",
+          exampleMessages: ["I'm here with the word pile."],
+          postHistoryInstructions: ["Stay in the current scene after reading history."],
+          toneRules: ["Sound warm and steady."],
+          boundaryRules: ["Do not overshadow study help."],
+          avatarFrames: {},
+          moodLines: {},
+          reactions: {}
+        },
+        statusSignals: {
+          dueCount: 0,
+          recentWord: null
+        }
+      },
+      {
+        onMessageDelta: (delta) => {
+          streamed.push(delta);
+        }
+      }
+    );
+
+    assert.equal(provider.streamCalls, 1);
+    assert.equal(streamed.join(""), "你好，我是 PawMemo。");
+    assert.deepEqual(result, {
+      kind: "reply",
+      mood: "curious",
+      message: "你好，我是 PawMemo。"
+    });
   } finally {
     if (priorApiKey === undefined) {
       delete process.env.GEMINI_API_KEY;
@@ -189,7 +343,15 @@ test("LlmShellPlanner fails when no API key is configured", async () => {
         activePack: {
           id: "momo",
           displayName: "Momo",
+          styleLabel: "loyal",
           romanceMode: "off",
+          description: "A loyal study dog.",
+          personality: "Calm and eager to help.",
+          scenario: "Already sharing the study nook.",
+          exampleMessages: ["I'm here with the word pile."],
+          postHistoryInstructions: ["Stay in the current scene after reading history."],
+          toneRules: ["Sound warm and steady."],
+          boundaryRules: ["Do not overshadow study help."],
           avatarFrames: {},
           moodLines: {},
           reactions: {}

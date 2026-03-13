@@ -14,13 +14,16 @@ test("createCliTheme leaves non-colored output untouched when disabled", () => {
 test("createCliTheme adds ANSI styling when enabled", () => {
   const theme = createCliTheme({ enabled: true });
   const prompt = theme.prompt("paw> ");
-  const companion = theme.companionCard("[ Momo · loyal ]\nU•ᴥ•U  Still here.");
+  const assistant = `${theme.assistantAccent("• ")}${theme.assistantLine("hello")}`;
+  const companion = theme.companionCard("[ Momo · loyal ]\n(•ᴗ•)  Still here.");
   const data = theme.dataBlock(
     "Word: lucid\nGloss: emitting light",
     "ask-result"
   );
 
   assert.ok(prompt.includes("\u001b["), "expected ANSI prompt styling");
+  assert.ok(assistant.includes("\u001b[96m"), "expected light-blue assistant accent");
+  assert.ok(assistant.includes("\u001b[97m"), "expected white assistant body");
   assert.ok(companion.includes("\u001b["), "expected ANSI companion styling");
   assert.ok(companion.includes("[ Momo · loyal ]"));
   assert.ok(data.includes("\u001b["), "expected ANSI data styling");

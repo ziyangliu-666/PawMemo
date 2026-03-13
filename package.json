@@ -2,13 +2,19 @@
   "name": "pawmemo",
   "version": "0.1.0",
   "private": false,
-  "description": "Cute dog-centered vocabulary memory system with a deterministic learning core.",
+  "description": "Local-first vocabulary companion with deterministic review and a TUI-first terminal shell.",
   "bin": {
     "pawmemo": "dist/src/cli/index.js"
   },
+  "files": [
+    "dist/src",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json",
     "clean": "rm -rf dist",
+    "prepack": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "npm run build && node --test dist/test/**/*.test.js",

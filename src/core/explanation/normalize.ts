@@ -81,6 +81,40 @@ function normalizeGlossField(value: string | undefined, maxLength: number): stri
   return compact.slice(0, maxLength).trim() || null;
 }
 
+function normalizeHighlightsField(value: string[] | string | undefined): string[] {
+  const rawItems = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/\s*[|,;]\s*/g)
+      : [];
+  const seen = new Set<string>();
+  const highlights: string[] = [];
+
+  for (const item of rawItems) {
+    const sanitized = sanitizePlainText(item);
+    const stripped = sanitized ? removeUnsupportedMemoryClaims(sanitized) : null;
+    const trimmed = trimToLength(stripped, 48);
+
+    if (!trimmed) {
+      continue;
+    }
+
+    const dedupeKey = trimmed.toLowerCase();
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    highlights.push(trimmed);
+
+    if (highlights.length >= 3) {
+      break;
+    }
+  }
+
+  return highlights;
+}
+
 export function normalizeExplanationOutput(
   context: ExplanationContext,
   payload: ExplanationPayload
@@ -104,18 +138,25 @@ export function normalizeExplanationOutput(
     explanation: normalizeTextField(
       payload.explanation,
       "No explanation available.",
-      280
+      220
     ),
     usageNote: normalizeTextField(
       payload.usage_note,
       "No usage note available.",
-      180
+      140
+    ),
+    example: normalizeTextField(
+      payload.example,
+      "No example available.",
+      160
     ),
     confidenceNote: normalizeTextField(
       payload.confidence_note,
       "This explanation depends on the provided context.",
       180
     ),
+    highlights: normalizeHighlightsField(payload.highlights),
+    responseLanguage: context.responseLanguage,
     provider: context.provider,
     model: context.model,
     knownWord: context.knowledge !== null,

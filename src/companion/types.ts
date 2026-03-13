@@ -43,7 +43,14 @@ export interface CompanionPackDefinition {
   archetype?: string;
   styleLabel?: string;
   romanceMode: RomanceMode;
-  avatarFrames: Partial<Record<CompanionMood, string[]>>;
+  description?: string;
+  personality?: string;
+  scenario?: string;
+  exampleMessages?: string[];
+  postHistoryInstructions?: string[];
+  toneRules?: string[];
+  boundaryRules?: string[];
+  avatarFrames?: Partial<Record<CompanionMood, string[]>>;
   moodLines: Partial<Record<CompanionMood, CompanionLineTemplateSet>>;
   reactions: Partial<Record<CompanionReactionKey, string[]>>;
 }

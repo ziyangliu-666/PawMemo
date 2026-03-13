@@ -12,6 +12,7 @@ import type {
 } from "./review-session-runner";
 import type { ReturnAfterGapSummary } from "./review-session-feedback";
 import {
+  CardAuthorContractError,
   ConfigurationError,
   DuplicateEncounterError,
   ExplanationContractError,
@@ -51,14 +52,6 @@ function sentence(parts: Array<string | null | undefined>): string {
     .join(" ");
 }
 
-function knownStateLine(result: AskWordResult): string | null {
-  if (result.knownState) {
-    return `In PawMemo it's currently sitting at ${result.knownState}`;
-  }
-
-  return "It's still new in PawMemo";
-}
-
 export function presentShellCaptureResult(
   result: CaptureWordResult
 ): string {
@@ -70,11 +63,18 @@ export function presentShellCaptureResult(
 }
 
 export function presentShellAskResult(result: AskWordResult): string {
+  if (result.responseLanguage === "zh") {
+    return sentence([
+      `这里的 ${quote(result.word)} 主要是指 ${quote(result.gloss)}`,
+      result.highlights.length > 0 ? `重点先看 ${result.highlights.join("、")}` : null
+    ]);
+  }
+
   return sentence([
-    `Here ${quote(result.word)} means ${quote(result.gloss)}`,
-    result.explanation,
-    result.usageNote,
-    knownStateLine(result)
+    `Here ${quote(result.word)} mainly means ${quote(result.gloss)}`,
+    result.highlights.length > 0
+      ? `The key bits are ${result.highlights.join(", ")}`
+      : null
   ]);
 }
 
@@ -246,8 +246,12 @@ export function createShellReviewSessionCopy(): ReviewSessionCopy {
         : `Next up: ${card.lemma}`;
     },
     showCardMetadata: false,
-    revealPrompt: "Press Enter when you're ready to peek, or type q to pause: ",
-    gradePrompt: "How did that feel? [a]gain [h]ard [g]ood [e]asy, or q to pause: ",
+    revealPrompt: "Ready to peek?",
+    gradePrompt: "How did that feel?",
+    invalidReveal: {
+      text: "Choose peek or pause so I know whether to show it.",
+      kind: "review-session-status-warning"
+    },
     invalidGrade: {
       text: "Give me again, hard, good, easy, or q so I can place it cleanly.",
       kind: "review-session-status-warning"
@@ -320,7 +324,7 @@ export function presentShellReviewSessionSummary(
 export function presentShellError(error: unknown): string {
   if (error instanceof ConfigurationError) {
     if (/API key is missing/i.test(error.message)) {
-      return "I need a live model connection before I can handle natural chat. Check `/model`, or set a key there and try again.";
+      return "I need a live model connection before I can handle natural chat. Check `/models`, or set a key with `/model key ...` and try again.";
     }
 
     return `I hit a setup snag. ${trimSentence(error.message)}`;
@@ -352,11 +356,19 @@ export function presentShellError(error: unknown): string {
     return "I couldn't get a clean word explanation to save safely, so I stopped instead of guessing.";
   }
 
+  if (error instanceof CardAuthorContractError) {
+    return "I couldn't draft a clear review card from that yet, so I stopped before saving something confusing.";
+  }
+
   if (
     error instanceof ProviderRequestError ||
     (error instanceof TypeError && /fetch failed/i.test(error.message))
   ) {
-    return "I couldn't reach the model just now. Try again, or check `/model` if the connection looks off.";
+    if (error instanceof ProviderRequestError && /timed out/i.test(error.message)) {
+      return "The model took too long to answer, so I stopped waiting. Try again, or check `/models` if that keeps happening.";
+    }
+
+    return "I couldn't reach the model just now. Try again, or check `/models` if the connection looks off.";
   }
 
   if (error instanceof Error) {

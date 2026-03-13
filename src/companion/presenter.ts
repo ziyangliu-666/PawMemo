@@ -1,4 +1,5 @@
 import { renderCompanionDefaultLine } from "./packs";
+import { listSharedExpressionFrames, resolveCompanionAvatarFrames } from "./expression-library";
 import type { CompanionPackDefinition, CompanionSnapshot } from "./types";
 
 const AVATAR_GAP = 1;
@@ -9,7 +10,7 @@ function renderCompanionAvatar(
   pack: CompanionPackDefinition,
   snapshot: CompanionSnapshot
 ): string {
-  const frames = pack.avatarFrames[snapshot.mood] ?? pack.avatarFrames.idle;
+  const frames = resolveCompanionAvatarFrames(pack, snapshot.mood);
   const fallbackFrame = "( companion missing )";
 
   if (!frames || frames.length === 0) {
@@ -69,7 +70,11 @@ function stringDisplayWidth(text: string): number {
 function resolveAvatarSlotWidth(pack: CompanionPackDefinition): number {
   let width = 0;
 
-  for (const frames of Object.values(pack.avatarFrames)) {
+  const frameGroups = pack.avatarFrames
+    ? [...Object.values(listSharedExpressionFrames()), ...Object.values(pack.avatarFrames)]
+    : Object.values(listSharedExpressionFrames());
+
+  for (const frames of frameGroups) {
     if (!frames) {
       continue;
     }

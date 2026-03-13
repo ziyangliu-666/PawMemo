@@ -1,38 +1,36 @@
-import { buildAskWordPrompt } from "../../llm/ask-word-prompt";
+import { buildCardAuthorPrompt } from "../../llm/card-author-prompt";
 import { createLlmProvider } from "../../llm/provider-factory";
 import { parseStructuredJson } from "../../llm/structured-output";
 import type { LlmProvider } from "../../llm/types";
 import type { LlmProviderName } from "../domain/models";
-import { normalizeExplanationOutput } from "./normalize";
-import type {
-  ExplainWordInput,
-  ExplainWordOutput,
-  ExplanationPayload
-} from "./types";
-import { ExplanationContextBuilder } from "./context-builder";
 import type { SqliteDatabase } from "../../storage/sqlite/database";
+import { normalizeCardAuthorOutput } from "./normalize";
+import type {
+  AuthorStudyCardsInput,
+  AuthorStudyCardsResult,
+  CardAuthorPayload
+} from "./types";
+import { CardAuthorContextBuilder } from "./context-builder";
 
-export class ExplanationEngine {
-  private readonly contextBuilder: ExplanationContextBuilder;
+export class CardAuthorEngine {
+  private readonly contextBuilder: CardAuthorContextBuilder;
 
   constructor(
     private readonly db: SqliteDatabase,
     private readonly providerFactory: (name: LlmProviderName) => LlmProvider = createLlmProvider
   ) {
-    this.contextBuilder = new ExplanationContextBuilder(db);
+    this.contextBuilder = new CardAuthorContextBuilder(db);
   }
 
-  async explain(
-    input: ExplainWordInput,
+  async author(
+    input: AuthorStudyCardsInput,
     options: { signal?: AbortSignal } = {}
-  ): Promise<ExplainWordOutput> {
+  ): Promise<AuthorStudyCardsResult> {
     const context = this.contextBuilder.build(input);
-    const prompt = buildAskWordPrompt({
+    const prompt = buildCardAuthorPrompt({
       word: context.word,
-      context: context.context,
-      responseLanguage: context.responseLanguage,
-      knowledge: context.knowledge,
-      recentWords: context.recentWords
+      gloss: context.gloss,
+      context: context.context
     });
     const provider = this.providerFactory(context.provider);
     const response = await provider.generateText({
@@ -43,10 +41,10 @@ export class ExplanationEngine {
       systemInstruction: prompt.systemInstruction,
       userPrompt: prompt.userPrompt,
       responseMimeType: "application/json",
-      temperature: 0.2
+      temperature: 0.1
     });
-    const payload = parseStructuredJson<ExplanationPayload>(response.text);
+    const payload = parseStructuredJson<CardAuthorPayload>(response.text);
 
-    return normalizeExplanationOutput(context, payload);
+    return normalizeCardAuthorOutput(context, payload);
   }
 }

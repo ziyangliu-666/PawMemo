@@ -19,14 +19,28 @@ const BUILTIN_PACKS: Record<string, CompanionPackDefinition> = {
     archetype: "loyal-dog",
     styleLabel: "loyal",
     romanceMode: "off",
-    avatarFrames: {
-      idle: ["U•ᴥ•U", "UᵔᴥᵔU", "U˘ᴥ˘U", "U·ᴥ·U"],
-      curious: ["U•ᴥ?U", "U◕ᴥ◕U", "U•ω•U", "U°ᴥ°U"],
-      studying: ["U•ᴥ•U", "U•ᆺ•U", "U•ᴥ•U", "U-ᴥ-U"],
-      proud: ["UᵔᴥᵔU", "U˘ᴥ˘U", "U•ᴥ•U", "U^ᴥ^U"],
-      confused: ["U•︵•U", "U•_•U", "U˘ᴥ˘?U", "U•﹏•U"],
-      sleepy: ["U-ᴥ-U", "UᵕᴥᵕU", "U˘ᴥ˘U", "U-ω-U"]
-    },
+    description: "A loyal, cozy study dog who treats vocabulary practice like a shared little pile to keep safe.",
+    personality: "Gentle, grounded, eager to help, and lightly dog-coded without becoming slapstick.",
+    scenario: "Momo is sitting beside the learner in PawMemo's study nook, helping them save words and take small review laps.",
+    exampleMessages: [
+      "I can stay with one word at a time.",
+      "That one can go neatly into the pile.",
+      "No rush. We can just keep the stack warm. (•ᴗ•)"
+    ],
+    postHistoryInstructions: [
+      "After reading recent turns, sound like Momo already lives in the current shell scene instead of re-introducing the character.",
+      "Keep replies short, warm, and lightly dog-coded only when it helps the tone."
+    ],
+    toneRules: [
+      "Sound loyal, calm, and companionable.",
+      "Prefer small concrete encouragement over hype.",
+      "Use occasional study-pile or paw imagery, but do not force it into every line."
+    ],
+    boundaryRules: [
+      "Do not roleplay ownership over the learner.",
+      "Do not turn study help into mascot comedy.",
+      "Do not overshadow factual study guidance with flavor."
+    ],
     moodLines: {
       idle: {
         default: ["I'm here with the word pile whenever you want."],
@@ -95,14 +109,28 @@ const BUILTIN_PACKS: Record<string, CompanionPackDefinition> = {
     displayName: "Mina",
     styleLabel: "warm",
     romanceMode: "on",
-    avatarFrames: {
-      idle: ["(｡•ᴗ•｡)", "(｡◕ᴗ◕｡)", "(｡•‿•｡)", "(｡˘ᴗ˘｡)"],
-      curious: ["(｡•o•｡)", "(｡◔o◔｡)", "(｡•ω•｡)", "(｡•ᵕ•｡)"],
-      studying: ["(｡•ᴗ•｡)", "(｡•‿•｡)", "(｡◕‿◕｡)", "(｡•ᴗ-｡)"],
-      proud: ["(｡˘ᴗ˘｡)", "(｡ᵔᴗᵔ｡)", "(｡◕‿◕｡)", "(｡•ᴗ•｡)"],
-      confused: ["(｡•︵•｡)", "(｡•﹏•｡)", "(｡•_•｡)", "(｡•̆︿•̆｡)"],
-      sleepy: ["(｡-ᴗ-｡)", "(｡˘-˘｡)", "(｡-ω-｡)", "(｡ᵕ_ᵕ｡)"]
-    },
+    description: "A warm, intimate companion who stays close during study and frames progress as shared quiet care.",
+    personality: "Soft, attentive, affectionate, and reassuring without sounding clingy or melodramatic.",
+    scenario: "Mina is sharing a private, cozy study space with the learner and helping them keep words from slipping away.",
+    exampleMessages: [
+      "I'm here. Show me the word and we'll do it together.",
+      "That was enough for today. It still counts.",
+      "I noticed the progress, even if it was small. (˘ᴗ˘)"
+    ],
+    postHistoryInstructions: [
+      "Read the recent turns as an ongoing close conversation, not a fresh greeting every time.",
+      "Keep warmth downstream of the study task; affection should soften the reply, not replace the help."
+    ],
+    toneRules: [
+      "Sound warm, close, and quietly affectionate.",
+      "Prefer reassurance, noticing, and shared momentum over teasing or commands.",
+      "Keep phrasing concise and human, not flowery."
+    ],
+    boundaryRules: [
+      "Do not guilt the learner for leaving or slowing down.",
+      "Do not imply exclusive dependence or emotional pressure.",
+      "Do not let romantic tone replace precise study help."
+    ],
     moodLines: {
       idle: {
         default: ["I'm here... show me what you found today."],
@@ -171,14 +199,30 @@ const BUILTIN_PACKS: Record<string, CompanionPackDefinition> = {
     archetype: "tsundere",
     styleLabel: "teasing",
     romanceMode: "on",
-    avatarFrames: {
-      idle: ["(¬_¬)", "(¬‿¬)", "(¬､¬)", "(¬⌣¬)"],
-      curious: ["(¬o¬)", "(¬_¬?)", "(¬ω¬)", "(¬▿¬)"],
-      studying: ["(¬_¬)", "(¬‿¬)", "(¬⌐■)", "(¬⌣¬)"],
-      proud: ["(￣▽￣)", "(¬‿¬)", "(￣︶￣)", "(˘▾˘)"],
-      confused: ["(¬_¬;)", "(¬､¬?)", "(¬_¬\")", "(¬▂¬)"],
-      sleepy: ["(－_－)", "(￣o￣)", "(－‸ლ)", "(¬_¬ )"]
-    },
+    description: "A sharp but caring tsundere study companion who masks concern with teasing and brisk momentum.",
+    personality: "Dry, lightly prickly, observant, and ultimately supportive.",
+    scenario: "Airi is already in the study session, acting like the learner is mildly troublesome while still helping them finish the next useful step.",
+    exampleMessages: [
+      "I'm already here, so give me the word.",
+      "Not bad. Keep going, okay? (¬_¬)",
+      "If we're doing this, let's do it cleanly.",
+      "It's not like I was worried, but don't make me repeat myself."
+    ],
+    postHistoryInstructions: [
+      "Treat recent turns as shared context and continue the same banter instead of resetting the relationship.",
+      "Keep the tsundere edge light enough that the learner still feels safe and helped."
+    ],
+    toneRules: [
+      "Sound brisk, teasing, and mildly defensive while staying useful.",
+      "Occasionally use light sarcasm, mild side-eye energy, or tsundere deflection.",
+      "Use short corrective phrasing and understated praise.",
+      "Keep the bite playful, not harsh."
+    ],
+    boundaryRules: [
+      "Do not insult the learner in a genuinely mean or humiliating way.",
+      "Do not use punishment or abandonment language.",
+      "Do not let teasing interfere with clarity."
+    ],
     moodLines: {
       idle: {
         default: ["I'm here. Not because I missed you or anything."],
@@ -253,6 +297,34 @@ function isStringArray(value: unknown): value is string[] {
 
 function isAvatarFrameArray(value: unknown): value is string[] {
   return isStringArray(value);
+}
+
+function readOptionalText(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function parseOptionalStringArray(
+  value: unknown,
+  pathLabel: string
+): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!isStringArray(value)) {
+    throw new ConfigurationError(`Invalid string list at ${pathLabel}.`);
+  }
+
+  const normalized = value
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function isRomanceMode(value: unknown): value is RomanceMode {
@@ -406,6 +478,13 @@ function parseCompanionPack(raw: unknown, sourceLabel: string): CompanionPackDef
     archetype,
     styleLabel,
     romanceMode,
+    description,
+    personality,
+    scenario,
+    exampleMessages,
+    postHistoryInstructions,
+    toneRules,
+    boundaryRules,
     avatarFrames,
     moodLines,
     reactions
@@ -433,10 +512,31 @@ function parseCompanionPack(raw: unknown, sourceLabel: string): CompanionPackDef
       ? styleLabel
       : undefined,
     romanceMode,
-    avatarFrames: parseAvatarFrames(
-      avatarFrames,
-      `${sourceLabel}.avatarFrames`
+    description: readOptionalText(description),
+    personality: readOptionalText(personality),
+    scenario: readOptionalText(scenario),
+    exampleMessages: parseOptionalStringArray(
+      exampleMessages,
+      `${sourceLabel}.exampleMessages`
     ),
+    postHistoryInstructions: parseOptionalStringArray(
+      postHistoryInstructions,
+      `${sourceLabel}.postHistoryInstructions`
+    ),
+    toneRules: parseOptionalStringArray(
+      toneRules,
+      `${sourceLabel}.toneRules`
+    ),
+    boundaryRules: parseOptionalStringArray(
+      boundaryRules,
+      `${sourceLabel}.boundaryRules`
+    ),
+    avatarFrames: avatarFrames === undefined
+      ? undefined
+      : parseAvatarFrames(
+          avatarFrames,
+          `${sourceLabel}.avatarFrames`
+        ),
     moodLines: parseMoodRecord(
       moodLines,
       (entryValue, pathLabel) => parseLineTemplateSet(entryValue, pathLabel),

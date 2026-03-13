@@ -1,11 +1,23 @@
 import { UsageError } from "../lib/errors";
 
-const BOOLEAN_FLAGS = new Set(["tui", "line"]);
+const BOOLEAN_FLAGS = new Set(["tui", "line", "debug"]);
 
 export interface ParsedCommand {
   name: string;
   args: string[];
   flags: Record<string, string>;
+}
+
+export function normalizeCliEntryArgv(argv: string[]): string[] {
+  if (argv.length === 0) {
+    return ["shell"];
+  }
+
+  if (argv[0]?.startsWith("--")) {
+    return ["shell", ...argv];
+  }
+
+  return argv;
 }
 
 export function parseCommand(argv: string[]): ParsedCommand {

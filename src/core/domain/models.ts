@@ -71,6 +71,12 @@ export interface ReviewCardRecord {
   updatedAt: string;
 }
 
+export interface ReviewCardDraft {
+  cardType: ReviewCardType;
+  promptText: string;
+  answerText: string;
+}
+
 export interface DueReviewCard {
   id: number;
   lexemeId: number;
@@ -88,6 +94,12 @@ export interface CaptureWordInput {
   word: string;
   context: string;
   gloss: string;
+  promptLanguage?: "en" | "zh";
+  cardDraft?: {
+    normalizedContext: string;
+    clozeContext?: string | null;
+    cardTypes?: ReviewCardType[];
+  };
   sourceLabel?: string;
   capturedAt?: string;
 }
@@ -179,7 +191,10 @@ export interface AskWordResult {
   gloss: string;
   explanation: string;
   usageNote: string;
+  example: string;
+  highlights: string[];
   confidenceNote: string;
+  responseLanguage: "en" | "zh";
   provider: LlmProviderName;
   model: string;
   knownWord: boolean;
@@ -188,8 +203,25 @@ export interface AskWordResult {
   recentContextCount: number;
 }
 
+export type TeachStudyContextMode = "author" | "definition";
+
 export interface TeachWordInput extends AskWordInput {
   sourceLabel?: string;
+  studyContextMode?: TeachStudyContextMode;
+}
+
+export interface TeachCardDraft {
+  word: string;
+  gloss: string;
+  promptLanguage: "en" | "zh";
+  normalizedContext: string;
+  clozeContext: string | null;
+  cards: ReviewCardDraft[];
+}
+
+export interface TeachWordDraftResult {
+  ask: AskWordResult;
+  draft: TeachCardDraft;
 }
 
 export interface TeachWordResult {

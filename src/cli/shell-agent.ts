@@ -1,6 +1,7 @@
 import type {
   AskWordInput,
   CaptureWordInput,
+  TeachWordDraftResult,
   TeachWordInput
 } from "../core/domain/models";
 import type {
@@ -23,12 +24,15 @@ export type ShellAction =
   | { kind: "command"; rawInput: string }
   | { kind: "ask"; input: AskWordInput }
   | { kind: "capture"; input: CaptureWordInput }
-  | { kind: "teach"; input: TeachWordInput };
+  | { kind: "teach-clarify-context"; input: TeachWordInput }
+  | { kind: "teach"; input: TeachWordInput }
+  | { kind: "teach-confirm"; input: TeachWordInput; draft: TeachWordDraftResult };
 
 export interface PendingShellProposal {
   action: ShellAction;
   confirmationMessage: string;
   cancelMessage: string;
+  teachDraft?: TeachWordDraftResult;
 }
 
 export type ShellAgentResponse =
@@ -79,6 +83,8 @@ export class ShellConversationAgent {
     options: {
       pendingProposal?: PendingShellProposal | null;
       context?: ShellAgentContext;
+      onPlannerMessageDelta?: (delta: string) => void | Promise<void>;
+      signal?: AbortSignal;
     } = {}
   ): Promise<ShellAgentDecision> {
     const input = rawInput.trim();
@@ -123,14 +129,22 @@ export class ShellConversationAgent {
           nextPendingProposal: null
         };
       case "planner":
-        return this.respondWithPlanner(input, options.context, pendingProposal);
+        return this.respondWithPlanner(
+          input,
+          options.context,
+          pendingProposal,
+          options.onPlannerMessageDelta,
+          options.signal
+        );
     }
   }
 
   private async respondWithPlanner(
     rawInput: string,
     context?: ShellAgentContext,
-    pendingProposal?: PendingShellProposal | null
+    pendingProposal?: PendingShellProposal | null,
+    onPlannerMessageDelta?: (delta: string) => void | Promise<void>,
+    signal?: AbortSignal
   ): Promise<ShellAgentDecision> {
     if (!this.planner || !context) {
       throw new ConfigurationError("Shell planner is unavailable.");
@@ -142,6 +156,9 @@ export class ShellConversationAgent {
       activePack: context.activePack,
       statusSignals: context.statusSignals,
       pendingProposalText: pendingProposal?.confirmationMessage ?? null
+    }, {
+      onMessageDelta: onPlannerMessageDelta,
+      signal
     });
 
     return this.mapPlannerDecision(planned, pendingProposal ?? null);

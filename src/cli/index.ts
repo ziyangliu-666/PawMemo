@@ -37,7 +37,11 @@ import {
 } from "./review-session-feedback";
 import { createCliTheme, shouldUseColor } from "./theme";
 import type { CliDataKind } from "./theme";
-import { parseCommand, type ParsedCommand } from "./command-parser";
+import {
+  normalizeCliEntryArgv,
+  parseCommand,
+  type ParsedCommand
+} from "./command-parser";
 import { ShellRunner } from "./shell-runner";
 import { ReadlineShellTerminal, TuiShellSurface } from "./shell-surface";
 import { ShellActionExecutor } from "./shell-action-executor";
@@ -88,6 +92,9 @@ function printHelp(): void {
     [
       "PawMemo CLI",
       "",
+      "Default entry:",
+      "  pawmemo [--line] [--debug] [--db path]",
+      "",
       "Commands:",
       "  pawmemo capture <word> --ctx \"...\" --gloss \"...\" [--source \"...\"] [--db path]",
       "  pawmemo review [--limit N] [--db path]",
@@ -100,7 +107,7 @@ function printHelp(): void {
       "  pawmemo rescue [--at ISO] [--db path]",
       "  pawmemo pet [--db path]",
       "  pawmemo pet [--pack PACK_ID] [--db path]",
-      "  pawmemo shell [--line] [--db path]",
+      "  pawmemo shell [--line] [--debug] [--db path]",
       "  pawmemo stats [--db path]",
       "  pawmemo config show [--db path]",
       "  pawmemo config llm [show] [--db path]",
@@ -112,6 +119,8 @@ function printHelp(): void {
       "  pawmemo config companion --pack PACK_ID [--db path]",
       "",
       "Examples:",
+      "  pawmemo",
+      "  pawmemo --line",
       "  pawmemo capture luminous --ctx \"The jellyfish gave off a luminous glow.\" --gloss \"emitting light\"",
       "  pawmemo review --limit 5",
       "  pawmemo review next",
@@ -123,8 +132,8 @@ function printHelp(): void {
       "  pawmemo rescue",
       "  pawmemo pet",
       "  pawmemo shell",
-      "  pawmemo shell",
       "  pawmemo shell --line",
+      "  pawmemo shell --debug",
       "  pawmemo stats",
       "  pawmemo config llm",
       "  pawmemo config llm use --provider openai --model gpt-5-mini --api-key KEY",
@@ -514,8 +523,13 @@ async function runShell(command: ParsedCommand): Promise<void> {
     const runner = new ShellRunner({
       db,
       terminal,
-      surface: useTui ? new TuiShellSurface(terminal) : undefined,
-      packId: command.flags.pack
+      surface: useTui
+        ? new TuiShellSurface(terminal, {
+            debug: command.flags.debug === "true"
+          })
+        : undefined,
+      packId: command.flags.pack,
+      debug: command.flags.debug === "true"
     });
     await runner.run();
   } finally {
@@ -699,12 +713,12 @@ async function runConfig(command: ParsedCommand): Promise<void> {
 }
 
 export async function main(argv: string[]): Promise<void> {
-  if (argv.length === 0 || argv.includes("--help") || argv.includes("-h")) {
+  if (argv.includes("--help") || argv.includes("-h")) {
     printHelp();
     return;
   }
 
-  const command = parseCommand(argv);
+  const command = parseCommand(normalizeCliEntryArgv(argv));
 
   switch (command.name) {
     case "capture":

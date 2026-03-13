@@ -7,7 +7,13 @@ import path from "node:path";
 import { ShellRunner } from "../src/cli/shell-runner";
 import { CaptureWordService } from "../src/core/orchestration/capture-word";
 import { ReviewService } from "../src/core/orchestration/review-service";
-import type { LlmProvider, LlmTextRequest, LlmTextResponse } from "../src/llm/types";
+import { ProviderRequestError } from "../src/lib/errors";
+import type {
+  LlmProvider,
+  LlmTextRequest,
+  LlmTextResponse,
+  LlmTextStreamRequest
+} from "../src/llm/types";
 import { openDatabase } from "../src/storage/sqlite/database";
 
 function tempDbPath(name: string): string {
@@ -42,6 +48,7 @@ class FakeStreamingShellTerminal extends FakeShellTerminal {
 class FakeGeminiProvider implements LlmProvider {
   readonly name = "gemini" as const;
   lastRequest: LlmTextRequest | null = null;
+  streamCalls = 0;
 
   async generateText(request: LlmTextRequest): Promise<LlmTextResponse> {
     this.lastRequest = request;
@@ -67,6 +74,29 @@ class FakeGeminiProvider implements LlmProvider {
             context: "加入 luminous",
             message:
               'I spotted "luminous" as a word to learn. Do you want me to add it to your study plan and infer a gloss first?'
+          })
+        };
+      }
+
+      if (/Current user input: 增加 spire 到库里/.test(prompt)) {
+        return {
+          text: JSON.stringify({
+            kind: "teach",
+            word: "spire",
+            context: "增加 spire 到库里",
+            message: "要我先把 spire 起草成可复习的卡片吗？"
+          })
+        };
+      }
+
+      if (/Current user input: i want to learning spire/i.test(prompt)) {
+        return {
+          text: JSON.stringify({
+            kind: "teach",
+            word: "spire",
+            context: "i want to learning spire",
+            message:
+              'I spotted "spire" as a word to learn. Do you want me to add it to your study plan and infer a gloss first?'
           })
         };
       }
@@ -106,12 +136,78 @@ class FakeGeminiProvider implements LlmProvider {
       };
     }
 
+    if (/study-card author/i.test(request.systemInstruction)) {
+      if (/Target word: luminous/i.test(request.userPrompt)) {
+        return {
+          text: JSON.stringify({
+            status: "ok",
+            reason: "",
+            normalized_context: "The jellyfish gave off a luminous glow.",
+            cloze_context: "The jellyfish gave off a ____ glow."
+          })
+        };
+      }
+
+      if (/Target word: lucid/i.test(request.userPrompt)) {
+        return {
+          text: JSON.stringify({
+            status: "ok",
+            reason: "",
+            normalized_context: "Her explanation was lucid and easy to follow.",
+            cloze_context: "Her explanation was ____ and easy to follow."
+          })
+        };
+      }
+
+      if (/Target word: spire/i.test(request.userPrompt)) {
+        if (/Raw captured context: The church had a tall spire\./i.test(request.userPrompt)) {
+          return {
+            text: JSON.stringify({
+              status: "ok",
+              reason: "",
+              normalized_context: "The church had a tall spire.",
+              cloze_context: "The church had a tall ____."
+            })
+          };
+        }
+
+        return {
+          text: JSON.stringify({
+            status: "clarify",
+            reason: "The raw context is just a save command.",
+            normalized_context: "",
+            cloze_context: ""
+          })
+        };
+      }
+    }
+
     return {
       text: JSON.stringify({
-        gloss: "emitting light",
-        explanation: "Here it describes something that gives off light.",
-        usage_note: "Often used for light or glowing surfaces.",
-        confidence_note: "The phrasing is clear enough to explain directly."
+        gloss: /Current user input: 增加 spire 到库里/i.test(request.userPrompt) ||
+          /\bword:\s*spire\b/i.test(request.userPrompt)
+          ? "尖塔"
+          : "emitting light",
+        explanation: /Current user input: 增加 spire 到库里/i.test(request.userPrompt) ||
+          /\bword:\s*spire\b/i.test(request.userPrompt)
+          ? "这里指建筑顶部细长尖起的塔尖。"
+          : "Here it describes something that gives off light.",
+        usage_note: /Current user input: 增加 spire 到库里/i.test(request.userPrompt) ||
+          /\bword:\s*spire\b/i.test(request.userPrompt)
+          ? "常见于教堂或古典建筑。"
+          : "Often used for light or glowing surfaces.",
+        example: /Current user input: 增加 spire 到库里/i.test(request.userPrompt) ||
+          /\bword:\s*spire\b/i.test(request.userPrompt)
+          ? "The church spire stood above the town."
+          : "The lantern looked luminous in the dark.",
+        highlights: /Current user input: 增加 spire 到库里/i.test(request.userPrompt) ||
+          /\bword:\s*spire\b/i.test(request.userPrompt)
+          ? ["建筑顶部", "尖起的塔尖"]
+          : ["gives off light", "glowing surfaces"],
+        confidence_note: /Current user input: 增加 spire 到库里/i.test(request.userPrompt) ||
+          /\bword:\s*spire\b/i.test(request.userPrompt)
+          ? "这个词本身足够明确。"
+          : "The phrasing is clear enough to explain directly."
       })
     };
   }
@@ -142,12 +238,54 @@ class FakeGeminiProvider implements LlmProvider {
       }
     ];
   }
+
+  async generateTextStream(request: LlmTextStreamRequest): Promise<LlmTextResponse> {
+    this.streamCalls += 1;
+    this.lastRequest = request;
+
+    if (/shell planner/i.test(request.systemInstruction)) {
+      if (
+        /Current user input: what does luminous mean\?/i.test(request.userPrompt) ||
+        /Current user input: 加入 luminous/.test(request.userPrompt) ||
+        /Current user input: 增加 spire 到库里/.test(request.userPrompt) ||
+        /Current user input: i want to learning spire/i.test(request.userPrompt) ||
+        /Current user input: yes/i.test(request.userPrompt) ||
+        /Current user input: 记住 luminous = 发光的/.test(request.userPrompt) ||
+        /Current user input: 救一下/.test(request.userPrompt)
+      ) {
+        return this.generateText(request);
+      }
+
+      for (const chunk of ['{"kind":"reply","message":"', "我是", " PawMemo", ' 的学习 shell。"}']) {
+        await request.onTextDelta(chunk);
+      }
+
+      return {
+        text: JSON.stringify({
+          kind: "reply",
+          message: "我是 PawMemo 的学习 shell。"
+        })
+      };
+    }
+
+    return this.generateText(request);
+  }
 }
 
 class SlowFakeGeminiProvider extends FakeGeminiProvider {
   async generateText(request: LlmTextRequest): Promise<LlmTextResponse> {
     await new Promise((resolve) => setTimeout(resolve, 220));
     return super.generateText(request);
+  }
+}
+
+class TimeoutFakeGeminiProvider extends FakeGeminiProvider {
+  async generateText(): Promise<LlmTextResponse> {
+    throw new ProviderRequestError("The OpenAI request timed out after 30s.");
+  }
+
+  async generateTextStream(): Promise<LlmTextResponse> {
+    throw new ProviderRequestError("The OpenAI request timed out after 30s.");
   }
 }
 
@@ -178,7 +316,7 @@ test("ShellRunner reuses capture flow and updates companion output", async () =>
       "expected companion line to mention the captured word"
     );
     assert.ok(
-      terminal.writes.some((line) => line.includes("U•ᴥ•U")),
+      terminal.writes.some((line) => line.includes("(•ᴗ•)")),
       "expected shell to use compact companion presence lines"
     );
 
@@ -195,6 +333,159 @@ test("ShellRunner reuses capture flow and updates companion output", async () =>
     assert.equal(counts.lexeme_count, 1);
     assert.equal(counts.card_count, 2);
   } finally {
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
+test("ShellRunner can emit debug lines when started with debug enabled", async () => {
+  const dbPath = tempDbPath("shell-debug");
+  const db = openDatabase(dbPath);
+
+  try {
+    const terminal = new FakeShellTerminal(["/help", "/quit"]);
+
+    const runner = new ShellRunner({
+      db,
+      terminal,
+      debug: true
+    });
+
+    await runner.run();
+
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Debug: shell start")),
+      "expected shell debug startup line"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Debug: agent response")),
+      "expected shell debug agent response line"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes("action: command")),
+      "expected shell debug output to show the chosen action"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Perf: execute action")),
+      "expected shell debug output to include action timing"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Perf: turn")),
+      "expected shell debug output to include turn timing"
+    );
+  } finally {
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
+test("ShellRunner can configure stream highlight from a shell command", async () => {
+  const dbPath = tempDbPath("shell-highlight");
+  const db = openDatabase(dbPath);
+
+  try {
+    const terminal = new FakeShellTerminal(["/highlight 40 100", "/quit"]);
+
+    const runner = new ShellRunner({
+      db,
+      terminal
+    });
+
+    await runner.run();
+
+    assert.ok(
+      terminal.writes.some((line) =>
+        line.includes("Stream highlight now uses 40% of 100 characters")
+      ),
+      "expected the shell to confirm the explicit stream highlight window"
+    );
+  } finally {
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
+test("ShellRunner debug mode prints perf timings for planner-backed study work", async () => {
+  const dbPath = tempDbPath("shell-debug-perf");
+  const db = openDatabase(dbPath);
+  const priorApiKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = "test-key";
+
+  try {
+    const fakeProvider = new FakeGeminiProvider();
+    const terminal = new FakeShellTerminal(["what does luminous mean?", "/quit"]);
+
+    const runner = new ShellRunner({
+      db,
+      terminal,
+      providerFactory: () => fakeProvider,
+      debug: true
+    });
+
+    await runner.run();
+
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Perf: planner")),
+      "expected planner timing in debug mode"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Perf: ask executor")),
+      "expected ask timing in debug mode"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Perf: ask render")),
+      "expected render timing in debug mode"
+    );
+  } finally {
+    if (priorApiKey === undefined) {
+      delete process.env.GEMINI_API_KEY;
+    } else {
+      process.env.GEMINI_API_KEY = priorApiKey;
+    }
+
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
+test("ShellRunner debug mode prints teach-stage perf breakdown", async () => {
+  const dbPath = tempDbPath("shell-debug-teach-perf");
+  const db = openDatabase(dbPath);
+  const priorApiKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = "test-key";
+
+  try {
+    const fakeProvider = new FakeGeminiProvider();
+    const terminal = new FakeShellTerminal(["加入 luminous", "yes", "/quit"]);
+
+    const runner = new ShellRunner({
+      db,
+      terminal,
+      providerFactory: () => fakeProvider,
+      debug: true
+    });
+
+    await runner.run();
+
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Perf: teach explanation llm")),
+      "expected explanation timing in teach debug mode"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Perf: teach card author llm")),
+      "expected card-author timing in teach debug mode"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Perf: teach sqlite capture")),
+      "expected sqlite capture timing in teach debug mode"
+    );
+  } finally {
+    if (priorApiKey === undefined) {
+      delete process.env.GEMINI_API_KEY;
+    } else {
+      process.env.GEMINI_API_KEY = priorApiKey;
+    }
+
     db.close();
     fs.rmSync(dbPath, { force: true });
   }
@@ -228,7 +519,7 @@ test("ShellRunner can render with a romance-coded companion pack", async () => {
       "expected romance-coded pack line to appear"
     );
     assert.ok(
-      terminal.writes.some((line) => line.includes("(¬_¬)")),
+      terminal.writes.some((line) => line.includes("(•ᴗ•)")),
       "expected compact pack header inside the shell transcript"
     );
   } finally {
@@ -294,11 +585,15 @@ test("ShellRunner gives a warm intro before review when cards are due", async ()
       "expected a shell-native review intro before the raw session loop"
     );
     assert.ok(
-      terminal.writes.some((line) => line.includes("First up: brisk")),
+      terminal.writes.some((line) => /FIRST UP|First up: brisk/.test(line)),
       "expected the shell review runner to use the warmer card heading copy"
     );
     assert.ok(
-      terminal.writes.some((line) => line.includes("Press Enter when you're ready to peek")),
+      terminal.writes.some(
+        (line) =>
+          line.includes("Ready to peek?") ||
+          line.includes("Press Enter when you're ready to peek")
+      ),
       "expected the shell review runner to use the warmer reveal prompt"
     );
     assert.ok(
@@ -470,7 +765,7 @@ test("ShellRunner accepts natural-language capture input", async () => {
   }
 });
 
-test("ShellRunner accepts natural-language ask input", async () => {
+test("ShellRunner accepts natural-language ask input", { concurrency: false }, async () => {
   const dbPath = tempDbPath("shell-natural-ask");
   const db = openDatabase(dbPath);
   const priorApiKey = process.env.GEMINI_API_KEY;
@@ -492,12 +787,20 @@ test("ShellRunner accepts natural-language ask input", async () => {
     await runner.run();
 
     assert.ok(
-      terminal.writes.some((line) => line.includes('Here "luminous" means "emitting light"')),
+      terminal.writes.some((line) => line.includes('Here "luminous" mainly means "emitting light"')),
       "expected natural ask input to use the shell-native ask reply"
     );
     assert.ok(
       terminal.writes.every((line) => !line.includes("Word: luminous")),
       "expected shell ask output to avoid the raw ask block"
+    );
+    assert.ok(
+      terminal.writes.some((line) => /EXPLAIN CARD|Explain card/.test(line)),
+      "expected shell ask output to add a structured explanation card"
+    );
+    assert.ok(
+      terminal.writes.some((line) => /SPOTLIGHT|Spotlight/.test(line)),
+      "expected shell ask card to include provider-returned spotlight phrases"
     );
     assert.match(fakeProvider.lastRequest?.userPrompt ?? "", /luminous/i);
   } finally {
@@ -537,14 +840,89 @@ test("ShellRunner asks for confirmation before teach-style save actions", async 
     assert.ok(
       terminal.writes.some(
         (line) =>
-          line.includes('I spotted "luminous" as a word to learn') ||
-          line.includes("add it to your study plan")
+          line.includes('drafted a card for "luminous"') ||
+          line.includes("起草成一张卡")
       ),
       "expected the shell to ask for confirmation before saving"
     );
     assert.ok(
+      terminal.writes.some(
+        (line) =>
+          line.includes("Recognition") ||
+          line.includes("识义卡")
+      ),
+      "expected the shell to preview the drafted study card before saving"
+    );
+    assert.ok(
+      terminal.writes.some(
+        (line) =>
+          line.includes("Save 2 cards") ||
+          line.includes("加入这 2 张卡")
+      ),
+      "expected the shell to show explicit save choices before persisting"
+    );
+    assert.ok(
       terminal.writes.some((line) => line.includes('I taught "luminous" as "emitting light"')),
       "expected confirmation to continue into the shell-native teach reply"
+    );
+  } finally {
+    if (priorApiKey === undefined) {
+      delete process.env.GEMINI_API_KEY;
+    } else {
+      process.env.GEMINI_API_KEY = priorApiKey;
+    }
+
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
+test("ShellRunner asks how to continue when teach intent lacks a usable example sentence", { concurrency: false }, async () => {
+  const dbPath = tempDbPath("shell-natural-teach-clarify");
+  const db = openDatabase(dbPath);
+  const priorApiKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = "test-key";
+
+  try {
+    const fakeProvider = new FakeGeminiProvider();
+    const terminal = new FakeShellTerminal([
+      "i want to learning spire",
+      "definition",
+      "yes",
+      "/quit"
+    ]);
+
+    const runner = new ShellRunner({
+      db,
+      terminal,
+      providerFactory: () => fakeProvider
+    });
+
+    await runner.run();
+
+    assert.ok(
+      terminal.writes.some((line) => line.includes("not a usable example sentence")),
+      "expected the shell to explain why it is asking for clarification"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Definition card")),
+      "expected the shell to show the structured clarification choices"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes("____ means 尖塔.")),
+      "expected the shell to preview the definition-style cloze card after explicit selection"
+    );
+    assert.ok(
+      terminal.writes.every((line) => !line.includes('What does "spire" mean in this context?')),
+      "expected definition-mode save to avoid creating a recognition card that reveals the answer"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes('I taught "spire" as "尖塔"')),
+      "expected the shell to complete the teach flow after the explicit definition-card choice"
+    );
+    assert.ok(
+      terminal.writes.every((line) => !line.includes("clear review card")),
+      "expected the old card-author failure message to stay hidden"
     );
   } finally {
     if (priorApiKey === undefined) {
@@ -623,6 +1001,43 @@ test("ShellRunner translates unknown slash commands into a conversational error"
   }
 });
 
+test("ShellRunner stops waiting and surfaces a timeout when planner work stalls", async () => {
+  const dbPath = tempDbPath("shell-timeout");
+  const db = openDatabase(dbPath);
+  const priorApiKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = "test-key";
+
+  try {
+    const terminal = new FakeShellTerminal(["加入新卡片 spire", "/quit"]);
+
+    const runner = new ShellRunner({
+      db,
+      terminal,
+      providerFactory: () => new TimeoutFakeGeminiProvider()
+    });
+
+    await runner.run();
+
+    assert.ok(
+      terminal.writes.some((line) => line.includes("stopped waiting")),
+      "expected a timeout-specific shell reply"
+    );
+    assert.ok(
+      terminal.writes.every((line) => !line.includes("Unknown error")),
+      "expected shell timeout handling to stay conversational"
+    );
+  } finally {
+    if (priorApiKey === undefined) {
+      delete process.env.GEMINI_API_KEY;
+    } else {
+      process.env.GEMINI_API_KEY = priorApiKey;
+    }
+
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
 test("ShellRunner can guide the learner into rescue from a slash command", async () => {
   const dbPath = tempDbPath("shell-rescue-command");
   const db = openDatabase(dbPath);
@@ -662,7 +1077,7 @@ test("ShellRunner can guide the learner into rescue from a slash command", async
       "expected a shell-native rescue intro"
     );
     assert.ok(
-      terminal.writes.some((line) => line.includes("First up: luminous")),
+      terminal.writes.some((line) => /FIRST UP|First up: luminous/.test(line)),
       "expected rescue to reuse the deterministic review runner with shell copy"
     );
   } finally {
@@ -742,6 +1157,7 @@ test("ShellRunner streams planner replies when the terminal supports raw writes"
 
     await runner.run();
 
+    assert.equal(fakeProvider.streamCalls, 1);
     assert.ok(
       terminal.rawWrites.length > 2,
       "expected the shell to emit planner reply chunks through raw writes"
@@ -803,8 +1219,12 @@ test("ShellRunner shows planner setup guidance when no API key is configured", a
   const db = openDatabase(dbPath);
   const priorApiKey = process.env.GEMINI_API_KEY;
   const priorGoogleApiKey = process.env.GOOGLE_API_KEY;
+  const priorOpenAiApiKey = process.env.OPENAI_API_KEY;
+  const priorAnthropicApiKey = process.env.ANTHROPIC_API_KEY;
   delete process.env.GEMINI_API_KEY;
   delete process.env.GOOGLE_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
 
   try {
     const terminal = new FakeShellTerminal(["hi", "/quit"]);
@@ -824,7 +1244,7 @@ test("ShellRunner shows planner setup guidance when no API key is configured", a
       "expected setup guidance when planner configuration is missing"
     );
     assert.ok(
-      terminal.writes.some((line) => line.includes("Check `/model`, or set a key there and try again.")),
+      terminal.writes.some((line) => line.includes("Check `/models`, or set a key with `/model key ...` and try again.")),
       "expected model guidance when planner configuration is missing"
     );
   } finally {
@@ -838,6 +1258,18 @@ test("ShellRunner shows planner setup guidance when no API key is configured", a
       delete process.env.GOOGLE_API_KEY;
     } else {
       process.env.GOOGLE_API_KEY = priorGoogleApiKey;
+    }
+
+    if (priorOpenAiApiKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = priorOpenAiApiKey;
+    }
+
+    if (priorAnthropicApiKey === undefined) {
+      delete process.env.ANTHROPIC_API_KEY;
+    } else {
+      process.env.ANTHROPIC_API_KEY = priorAnthropicApiKey;
     }
 
     db.close();
@@ -942,6 +1374,103 @@ test("ShellRunner supports explicit /model use, key, and url commands", async ()
       "expected /model key and /model url to confirm the stored OpenAI key and URL"
     );
   } finally {
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
+test("ShellRunner supports interactive /models switching", async () => {
+  const dbPath = tempDbPath("shell-model-picker");
+  const db = openDatabase(dbPath);
+  const priorOpenAiApiKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "test-openai-key";
+
+  try {
+    const terminal = new FakeShellTerminal([
+      "/models",
+      "openai",
+      "gpt-5-mini",
+      "/quit"
+    ]);
+
+    const runner = new ShellRunner({
+      db,
+      terminal,
+      providerFactory: (name) => ({
+        name,
+        async generateText() {
+          throw new Error("generateText should not be called during /models");
+        },
+        async listModels() {
+          if (name === "openai") {
+            return [
+              {
+                id: "gpt-5-mini",
+                provider: "openai",
+                displayName: "GPT-5 Mini",
+                createdAt: null,
+                ownedBy: "openai"
+              },
+              {
+                id: "gpt-5",
+                provider: "openai",
+                displayName: "GPT-5",
+                createdAt: null,
+                ownedBy: "openai"
+              }
+            ];
+          }
+
+          return [
+            {
+              id: "gemini-2.5-flash",
+              provider: "gemini",
+              displayName: "Gemini 2.5 Flash",
+              createdAt: null,
+              ownedBy: "google"
+            }
+          ];
+        }
+      })
+    });
+
+    await runner.run();
+
+    const settings = db
+      .prepare(
+        `
+          SELECT key, value
+          FROM app_settings
+          WHERE key IN ('llm.provider', 'llm.model', 'llm.model.openai')
+          ORDER BY key ASC
+        `
+      )
+      .all() as Array<{ key: string; value: string }>;
+
+    assert.deepEqual(settings, [
+      { key: "llm.model", value: "gpt-5-mini" },
+      { key: "llm.model.openai", value: "gpt-5-mini" },
+      { key: "llm.provider", value: "openai" }
+    ]);
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Pick a provider")),
+      "expected /models to ask for a provider first"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Pick a openai model")),
+      "expected /models to ask for a model next"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Current: openai (gpt-5-mini)")),
+      "expected /models to confirm the updated model status"
+    );
+  } finally {
+    if (priorOpenAiApiKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = priorOpenAiApiKey;
+    }
+
     db.close();
     fs.rmSync(dbPath, { force: true });
   }

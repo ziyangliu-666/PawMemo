@@ -38,9 +38,26 @@ function formatRecentTurns(turns: ShellPlannerTurn[]): string {
     .join("\n");
 }
 
+function formatPromptList(
+  title: string,
+  values: string[] | undefined,
+  maxItems = 3
+): string[] {
+  if (!values || values.length === 0) {
+    return [`${title}: none`];
+  }
+
+  return [
+    `${title}:`,
+    ...values.slice(0, maxItems).map((value) => `- ${clipText(value, 180)}`)
+  ];
+}
+
 export function buildShellPlannerPrompt(
   input: ShellPlannerPromptInput
 ): ShellPlannerPrompt {
+  const pack = input.activePack;
+
   return {
     systemInstruction: [
       "You are PawMemo's shell planner.",
@@ -65,17 +82,34 @@ export function buildShellPlannerPrompt(
       "For ask, teach, or capture, include word and context.",
       "For capture, also include gloss.",
       "For reply or clarify, include message.",
-      "For teach, you may include message as the confirmation question."
+      "For teach, you may include message as the confirmation question.",
+      "All companions may occasionally end a short reply or clarification with one fitting kaomoji.",
+      "Keep that kaomoji optional: use at most one, usually at the end, and do not attach it to every reply.",
+      `Active companion name: ${pack.displayName}.`,
+      `Active companion id: ${pack.id}.`,
+      `Active companion style hint: ${pack.styleLabel ?? "none"}.`,
+      `Companion description: ${pack.description ?? "none"}.`,
+      `Companion personality: ${pack.personality ?? "none"}.`,
+      `Current companion scenario: ${pack.scenario ?? "none"}.`,
+      ...formatPromptList("Companion tone rules", pack.toneRules),
+      ...formatPromptList("Companion boundary rules", pack.boundaryRules),
+      "Treat those companion layers as style guidance only.",
+      "Do not let persona flavor override task usefulness, factual accuracy, or PawMemo's deterministic study boundaries."
     ].join(" "),
     userPrompt: [
       `Current user input: ${input.rawInput}`,
-      `Active companion: ${input.activePack.displayName} (${input.activePack.id})`,
-      `Pack style hint: ${input.activePack.styleLabel ?? "none"}`,
+      `Active companion: ${pack.displayName} (${pack.id})`,
+      `Pack style hint: ${pack.styleLabel ?? "none"}`,
       `Pending proposal: ${input.pendingProposalText ?? "none"}`,
       `Due count: ${input.statusSignals.dueCount}`,
       `Recent word: ${input.statusSignals.recentWord ?? "none"}`,
       "Recent turns:",
       formatRecentTurns(input.recentTurns),
+      ...formatPromptList(
+        "Post-history instructions",
+        pack.postHistoryInstructions
+      ),
+      ...formatPromptList("Example voice messages", pack.exampleMessages),
       "Output rules:",
       '- Use {"kind":"reply","message":"..."} for direct natural answers.',
       '- Use {"kind":"clarify","message":"..."} for a short follow-up question.',

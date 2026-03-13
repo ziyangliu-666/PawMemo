@@ -6,6 +6,7 @@ export type ShellTranscriptCellKind =
   | "companion-line"
   | "user-line"
   | "assistant"
+  | "alert"
   | "help"
   | "data"
   | "study-card";
@@ -68,7 +69,20 @@ export class ShellTranscriptModel {
         ? `${previous.text}\n${text}`
         : text;
       previous.dataKind = dataKind ?? previous.dataKind;
-      previous.study = study ?? previous.study;
+      if (previous.study?.view && study?.view) {
+        previous.study = {
+          ...study,
+          view: {
+            variant: study.view.variant,
+            sections: [
+              ...previous.study.view.sections,
+              ...study.view.sections
+            ]
+          }
+        };
+      } else {
+        previous.study = study ?? previous.study;
+      }
       return previous;
     }
 

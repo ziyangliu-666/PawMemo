@@ -55,5 +55,5 @@ test("renderCompanionCard keeps momo's idle line compact", () => {
     lineOverride: "Just point me at a word, and I'll trot after it."
   }).split("\n")[1] ?? "";
 
-  assert.match(firstBodyLine, /^U•ᴥ•U {2}Just point me at a word/);
+  assert.match(firstBodyLine, /^\(•ᴗ•\) {2}Just point me at a word/);
 });

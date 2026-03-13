@@ -32,9 +32,13 @@ test("external companion pack json can be loaded from companions directory", () 
           id: "custom-heart",
           displayName: "Lio",
           romanceMode: "on",
-          avatarFrames: {
-            idle: ["[o_o]", "[>_<]"]
-          },
+          description: "A close study partner.",
+          personality: "Warm and patient.",
+          scenario: "Already sitting beside the learner.",
+          exampleMessages: ["Stay a moment.", "We can keep going slowly."],
+          postHistoryInstructions: ["Continue the current scene instead of reintroducing yourself."],
+          toneRules: ["Sound intimate but calm."],
+          boundaryRules: ["Do not guilt the learner."],
           moodLines: {
             idle: {
               default: ["Stay a moment."],
@@ -55,6 +59,15 @@ test("external companion pack json can be loaded from companions directory", () 
 
     const pack = loadCompanionPack("custom-heart");
     assert.equal(pack.displayName, "Lio");
+    assert.equal(pack.description, "A close study partner.");
+    assert.equal(pack.personality, "Warm and patient.");
+    assert.equal(pack.scenario, "Already sitting beside the learner.");
+    assert.deepEqual(pack.exampleMessages, ["Stay a moment.", "We can keep going slowly."]);
+    assert.deepEqual(pack.postHistoryInstructions, [
+      "Continue the current scene instead of reintroducing yourself."
+    ]);
+    assert.deepEqual(pack.toneRules, ["Sound intimate but calm."]);
+    assert.deepEqual(pack.boundaryRules, ["Do not guilt the learner."]);
     assert.equal(
       renderCompanionDefaultLine(
         pack,
@@ -70,6 +83,7 @@ test("external companion pack json can be loaded from companions directory", () 
       renderCompanionReaction(pack, "pet_ping", {}, 0),
       "Still here, darling."
     );
+    assert.equal(pack.avatarFrames, undefined);
   } finally {
     if (previousDir === undefined) {
       delete process.env.PAWMEMO_COMPANIONS_DIR;

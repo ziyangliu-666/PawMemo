@@ -1,10 +1,10 @@
 import type {
   DueReviewCard,
+  ReviewCardDraft,
   ReviewCardRecord,
   ReviewCardState,
   ReviewCardType
 } from "../../core/domain/models";
-import type { CardSeed } from "../../review/card-builder";
 import type { SqliteDatabase } from "../sqlite/database";
 
 function mapReviewCard(row: Record<string, unknown>): ReviewCardRecord {
@@ -39,7 +39,7 @@ function mapDueReviewCard(row: Record<string, unknown>): DueReviewCard {
 export class ReviewCardRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
-  createMany(lexemeId: number, cards: CardSeed[], timestamp: string): ReviewCardRecord[] {
+  createMany(lexemeId: number, cards: ReviewCardDraft[], timestamp: string): ReviewCardRecord[] {
     const insert = this.db.prepare(
       `
         INSERT INTO review_cards (

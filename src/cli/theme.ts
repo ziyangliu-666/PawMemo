@@ -68,7 +68,10 @@ export interface CliTheme {
   muted(text: string): string;
   prompt(text: string): string;
   status(text: string): string;
+  statusAccent(text: string): string;
   error(text: string): string;
+  assistantLine(text: string): string;
+  assistantAccent(text: string): string;
   companionCard(text: string): string;
   companionLine(text: string): string;
   reviewCardBg(text: string): string;
@@ -111,9 +114,12 @@ export function createCliTheme(options: ThemeOptions): CliTheme {
   const muted = (text: string): string => applyAnsi(enabled, text, [90]);
   const prompt = (text: string): string => applyAnsi(enabled, text, [1, 36]);
   const status = (text: string): string => applyAnsi(enabled, text, [96]);
+  const statusAccent = (text: string): string => applyAnsi(enabled, text, [1, 97]);
   const success = (text: string): string => applyAnsi(enabled, text, [32]);
   const warning = (text: string): string => applyAnsi(enabled, text, [33]);
   const error = (text: string): string => applyAnsi(enabled, text, [1, 31]);
+  const assistantLine = (text: string): string => applyAnsi(enabled, text, [97]);
+  const assistantAccent = (text: string): string => applyAnsi(enabled, text, [96]);
   const companionHeader = (text: string): string => applyAnsi(enabled, text, [1, 35]);
   const companionBody = (text: string): string => applyAnsi(enabled, text, [95]);
   const reviewCardBg = (text: string): string => applyAnsi(enabled, text, [48, 5, 236]);
@@ -264,7 +270,10 @@ export function createCliTheme(options: ThemeOptions): CliTheme {
     muted,
     prompt,
     status,
+    statusAccent,
     error,
+    assistantLine,
+    assistantAccent,
     companionCard,
     companionLine,
     reviewCardBg,

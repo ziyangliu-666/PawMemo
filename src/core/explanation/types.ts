@@ -18,6 +18,7 @@ export interface ExplanationContext {
   word: string;
   normalized: string;
   context: string;
+  responseLanguage: "en" | "zh";
   provider: LlmProviderName;
   model: string;
   apiKey: string;
@@ -34,7 +35,10 @@ export interface ExplainWordOutput {
   providerGlossAccepted: boolean;
   explanation: string;
   usageNote: string;
+  example: string;
+  highlights: string[];
   confidenceNote: string;
+  responseLanguage: "en" | "zh";
   provider: LlmProviderName;
   model: string;
   knownWord: boolean;
@@ -47,6 +51,8 @@ export interface ExplanationPayload {
   gloss?: string;
   explanation?: string;
   usage_note?: string;
+  example?: string;
+  highlights?: string[] | string;
   confidence_note?: string;
 }
 
@@ -57,7 +63,10 @@ export function toAskWordResult(output: ExplainWordOutput): AskWordResult {
     gloss: output.gloss,
     explanation: output.explanation,
     usageNote: output.usageNote,
+    example: output.example,
+    highlights: output.highlights,
     confidenceNote: output.confidenceNote,
+    responseLanguage: output.responseLanguage,
     provider: output.provider,
     model: output.model,
     knownWord: output.knownWord,

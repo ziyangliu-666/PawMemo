@@ -1,10 +1,9 @@
 import { UsageError } from "../../lib/errors";
-import { resolveApiKey } from "../../llm/resolve-api-key";
 import { normalizeApiUrl } from "../../llm/normalize-api-url";
+import { resolveApiKey } from "../../llm/resolve-api-key";
 import { AppSettingsRepository } from "../../storage/repositories/app-settings-repository";
-import { WordQueryRepository } from "../../storage/repositories/word-query-repository";
 import type { SqliteDatabase } from "../../storage/sqlite/database";
-import type { ExplainWordInput, ExplanationContext } from "./types";
+import type { CardAuthorContext, AuthorStudyCardsInput } from "./types";
 
 function normalizeWord(word: string): string {
   return word.trim().toLowerCase();
@@ -20,22 +19,17 @@ function requireValue(name: string, value: string): string {
   return trimmed;
 }
 
-function detectResponseLanguage(context: string): "en" | "zh" {
-  return /[\u3400-\u9fff]/.test(context) ? "zh" : "en";
-}
-
-export class ExplanationContextBuilder {
+export class CardAuthorContextBuilder {
   private readonly settings: AppSettingsRepository;
-  private readonly words: WordQueryRepository;
 
   constructor(private readonly db: SqliteDatabase) {
     this.settings = new AppSettingsRepository(db);
-    this.words = new WordQueryRepository(db);
   }
 
-  build(input: ExplainWordInput): ExplanationContext {
+  build(input: AuthorStudyCardsInput): CardAuthorContext {
     const word = requireValue("word", input.word);
     const context = requireValue("context", input.context);
+    const gloss = requireValue("gloss", input.gloss);
     const normalized = normalizeWord(word);
     const storedSettings = this.settings.getLlmSettings();
     const provider = input.provider ?? storedSettings.provider;
@@ -48,29 +42,18 @@ export class ExplanationContextBuilder {
       provider === storedSettings.provider
         ? storedSettings.apiUrl
         : this.settings.getStoredApiUrl(provider);
-    const apiKey = resolveApiKey(
-      provider,
-      input.apiKey,
-      storedApiKey
-    );
+    const apiKey = resolveApiKey(provider, input.apiKey, storedApiKey);
     const apiUrl = normalizeApiUrl(input.apiUrl ?? storedApiUrl);
-    const knowledge = this.words.getKnowledgeByNormalized(normalized);
-    const recentWords = this.words
-      .listRecentWords(3)
-      .filter((recentWord) => recentWord.toLowerCase() !== normalized)
-      .slice(0, 3);
 
     return {
       word,
       normalized,
       context,
-      responseLanguage: detectResponseLanguage(context),
+      gloss,
       provider,
       model,
       apiKey,
-      apiUrl,
-      knowledge,
-      recentWords
+      apiUrl
     };
   }
 }

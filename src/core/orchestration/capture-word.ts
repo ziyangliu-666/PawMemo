@@ -1,5 +1,6 @@
 import type { CaptureWordInput, CaptureWordResult } from "../domain/models";
 import { buildCardSeeds } from "../../review/card-builder";
+import { detectCardPromptLanguage } from "../../review/card-language";
 import { nowIso } from "../../lib/time";
 import { EncounterRepository } from "../../storage/repositories/encounter-repository";
 import { EventLogRepository } from "../../storage/repositories/event-log-repository";
@@ -39,14 +40,21 @@ export class CaptureWordService {
 
   capture(input: CaptureWordInput): CaptureWordResult {
     const word = requireValue("word", input.word);
-    const context = requireValue("context", input.context);
+    const rawContext = requireValue("context", input.context);
     const gloss = requireValue("gloss", input.gloss);
+    const context = input.cardDraft
+      ? requireValue("cardDraft.normalizedContext", input.cardDraft.normalizedContext)
+      : rawContext;
+    const promptLanguage = input.promptLanguage ?? detectCardPromptLanguage(rawContext);
     const capturedAt = nowIso(input.capturedAt);
     const normalized = normalizeWord(word);
     const seeds = buildCardSeeds({
       word,
       context,
-      gloss
+      gloss,
+      promptLanguage,
+      clozeContext: input.cardDraft?.clozeContext ?? null,
+      cardTypes: input.cardDraft?.cardTypes
     });
 
     return this.db.transaction(() => {

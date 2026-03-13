@@ -130,6 +130,39 @@ test("ReviewSessionRunner can quit before reveal without grading", async () => {
   }
 });
 
+test("ReviewSessionRunner reprompts after an invalid reveal choice", async () => {
+  const dbPath = tempDbPath("review-session-runner-invalid-reveal");
+  const db = openDatabase(dbPath);
+
+  try {
+    const capture = new CaptureWordService(db);
+    capture.capture({
+      word: "luminous",
+      context: "The jellyfish gave off a luminous glow.",
+      gloss: "emitting light",
+      capturedAt: "2026-03-12T00:00:00.000Z"
+    });
+
+    const terminal = new FakeTerminal(["wat", "", "g"]);
+    const session = ReviewSessionRunner.withTerminal(db, terminal);
+
+    const result = await session.run({
+      limit: 1,
+      now: "2026-03-12T12:00:00.000Z"
+    });
+
+    assert.equal(result.reviewedCount, 1);
+    assert.ok(
+      terminal.writes.some((line) =>
+        line.includes("Choose reveal or quit")
+      )
+    );
+  } finally {
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
 test("ReviewSessionRunner preserves structured study intent for review transcript output", async () => {
   const dbPath = tempDbPath("review-session-runner-intent");
   const db = openDatabase(dbPath);
@@ -151,6 +184,17 @@ test("ReviewSessionRunner preserves structured study intent for review transcrip
       now: "2026-03-12T12:00:00.000Z"
     });
 
+    const introBlock = terminal.dataBlocks.find(
+      (entry) =>
+        entry.kind === "review-session-heading" &&
+        entry.intent?.kind === "review-intro"
+    );
+
+    assert.ok(introBlock, "expected one structured review intro card");
+    assert.equal(
+      introBlock?.intent?.view?.sections.filter((section) => section.role === "title").length,
+      1
+    );
     assert.ok(
       terminal.dataBlocks.some(
         (entry) =>

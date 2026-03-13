@@ -4,9 +4,12 @@ import type {
   LlmModelListRequest,
   LlmProvider,
   LlmTextRequest,
-  LlmTextResponse
+  LlmTextResponse,
+  LlmTextStreamRequest
 } from "../types";
 import { normalizeApiUrl } from "../normalize-api-url";
+import { fetchWithLlmTimeout } from "../fetch-with-timeout";
+import { collectSseEvents } from "../sse";
 
 interface AnthropicErrorPayload {
   error?: {
@@ -19,6 +22,9 @@ interface AnthropicMessagesPayload extends AnthropicErrorPayload {
     type?: string;
     text?: string;
   }>;
+  delta?: {
+    text?: string;
+  };
 }
 
 interface AnthropicModelPage extends AnthropicErrorPayload {
@@ -47,22 +53,27 @@ export class AnthropicProvider implements LlmProvider {
   readonly name = "anthropic" as const;
 
   async generateText(request: LlmTextRequest): Promise<LlmTextResponse> {
-    const response = await fetch(`${getBaseUrl(request.apiUrl)}/messages`, {
-      method: "POST",
-      headers: createHeaders(request.apiKey),
-      body: JSON.stringify({
-        model: request.model,
-        max_tokens: 1024,
-        temperature: request.temperature ?? 0.2,
-        system: request.systemInstruction,
-        messages: [
-          {
-            role: "user",
-            content: request.userPrompt
-          }
-        ]
-      })
-    });
+    const response = await fetchWithLlmTimeout(
+      `${getBaseUrl(request.apiUrl)}/messages`,
+      {
+        method: "POST",
+        signal: request.signal,
+        headers: createHeaders(request.apiKey),
+        body: JSON.stringify({
+          model: request.model,
+          max_tokens: 1024,
+          temperature: request.temperature ?? 0.2,
+          system: request.systemInstruction,
+          messages: [
+            {
+              role: "user",
+              content: request.userPrompt
+            }
+          ]
+        })
+      },
+      "Anthropic request"
+    );
 
     const payload = (await response.json()) as AnthropicMessagesPayload;
 
@@ -86,6 +97,69 @@ export class AnthropicProvider implements LlmProvider {
     return { text };
   }
 
+  async generateTextStream(
+    request: LlmTextStreamRequest
+  ): Promise<LlmTextResponse> {
+    const response = await fetchWithLlmTimeout(
+      `${getBaseUrl(request.apiUrl)}/messages`,
+      {
+        method: "POST",
+        signal: request.signal,
+        headers: createHeaders(request.apiKey),
+        body: JSON.stringify({
+          model: request.model,
+          max_tokens: 1024,
+          temperature: request.temperature ?? 0.2,
+          stream: true,
+          system: request.systemInstruction,
+          messages: [
+            {
+              role: "user",
+              content: request.userPrompt
+            }
+          ]
+        })
+      },
+      "Anthropic request"
+    );
+
+    if (!response.ok) {
+      const payload = (await response.json()) as AnthropicErrorPayload;
+      throw new ProviderRequestError(
+        payload.error?.message ??
+          `Anthropic request failed with status ${response.status}.`
+      );
+    }
+
+    let text = "";
+
+    await collectSseEvents(response, async (event) => {
+      if (event.data === "[DONE]") {
+        return;
+      }
+
+      const payload = JSON.parse(event.data) as AnthropicMessagesPayload;
+      const delta =
+        event.event === "content_block_delta" &&
+        typeof payload.delta?.text === "string"
+          ? payload.delta.text
+          : null;
+
+      if (!delta) {
+        return;
+      }
+
+      text += delta;
+      await request.onTextDelta(delta);
+    });
+
+    if (text.trim().length === 0) {
+      throw new ProviderRequestError("Anthropic returned an empty response.");
+    }
+
+    return { text: text.trim() };
+  }
+
   async listModels(request: LlmModelListRequest): Promise<LlmModelInfo[]> {
     const models: LlmModelInfo[] = [];
     let nextAfterId: string | null = null;
@@ -99,10 +173,15 @@ export class AnthropicProvider implements LlmProvider {
         url.searchParams.set("after_id", nextAfterId);
       }
 
-      const response = await fetch(url, {
-        method: "GET",
-        headers: createHeaders(request.apiKey)
-      });
+      const response = await fetchWithLlmTimeout(
+        url,
+        {
+          method: "GET",
+          signal: request.signal,
+          headers: createHeaders(request.apiKey)
+        },
+        "Anthropic model listing request"
+      );
 
       const payload = (await response.json()) as AnthropicModelPage;
 

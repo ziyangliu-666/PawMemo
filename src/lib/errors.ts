@@ -46,3 +46,10 @@ export class ExplanationContractError extends Error {
     this.name = "ExplanationContractError";
   }
 }
+
+export class CardAuthorContractError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CardAuthorContractError";
+  }
+}

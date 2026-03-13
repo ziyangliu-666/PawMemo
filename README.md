@@ -1,112 +1,137 @@
 # PawMemo
 
-PawMemo is a local-first vocabulary companion with a deterministic learning core and a conversational terminal surface.
+PawMemo is a local-first vocabulary companion with a deterministic learning core and a TUI-first terminal shell.
 
-It is opinionated about one boundary: companionship can shape tone, pacing, and re-entry feel, but it must not replace explicit word state, retrieval, or spaced-review scheduling.
+Its core boundary is deliberate: companion tone can shape pacing, warmth, and return moments, but study truth still lives in explicit word state, retrieval, and spaced-review scheduling.
 
 ## What It Does
 
-- captures words with context and gloss into SQLite
-- creates deterministic review cards
-- supports `review`, `review session`, `rescue`, `ask`, `teach`, `pet`, and `shell`
+- stores words, context, and glosses in SQLite
+- builds deterministic review cards
+- supports `review`, `review session`, `rescue`, `ask`, `teach`, `pet`, `stats`, and `shell`
 - keeps the learning engine separate from companion rendering
 - supports multiple companion packs without changing study truth
-- includes an experimental full-screen `--tui` shell
+- opens straight into the shell when you run `pawmemo`
 
-## Why This Repo Exists
+## Current CLI Behavior
 
-Many language-learning tools are either:
+- `pawmemo` opens the shell directly
+- in a real terminal, the default shell is the full-screen TUI
+- `pawmemo --line` forces the line-shell fallback
+- `pawmemo shell` is still available, but no longer required
+- the default database path is `.data/pawmemo.db` under the current working directory
+- `PAWMEMO_DB_PATH` or `--db /path/to/db.sqlite` can override that path
 
-- rigid flashcard systems with no emotional continuity
-- chat products that feel warm but hide learning truth inside prompts
+## Install
 
-PawMemo is trying to sit in the middle:
-
-- deterministic, inspectable learning state
-- a companion-led interaction surface
-- gentle return/rescue rituals instead of backlog guilt
-
-## Current Status
-
-PawMemo is still early, but the core loop is real:
-
-- capture words
-- review due cards
-- rescue the single most important overdue card
-- talk to a shell that can route into study actions
-- try the experimental TUI shell
-
-The repo is controlled through `doc/`, which acts as the product and architecture control plane.
-
-## Quick Start
+### From this repo for local development
 
 ```bash
 npm install
 npm run build
-npm run lint
-npm test
+npm link
 ```
 
-Run a few commands:
+Then launch PawMemo with:
 
 ```bash
-node dist/src/cli/index.js capture luminous --ctx "The jellyfish gave off a luminous glow." --gloss "emitting light"
-node dist/src/cli/index.js review
-node dist/src/cli/index.js review session --limit 5
-node dist/src/cli/index.js rescue
-node dist/src/cli/index.js pet
-node dist/src/cli/index.js shell
-node dist/src/cli/index.js shell --tui
+pawmemo
 ```
 
-If you want an isolated local database while exploring:
+### From a packaged tarball
+
+Build the package:
 
 ```bash
-node dist/src/cli/index.js shell --tui --db /tmp/pawmemo-dev.db
+npm pack
 ```
 
-## Shell Modes
-
-`pawmemo shell`
-
-- line-oriented conversational shell
-- fastest path to try natural chat, capture, ask, teach, and rescue
-
-`pawmemo shell --tui`
-
-- experimental full-screen terminal UI
-- transcript, status row, composer, footer
-- raw-mode inline composer with cursor movement
-
-## LLM Configuration
-
-PawMemo can run with or without a configured model.
-
-Built-in providers:
-
-- `gemini`
-- `openai`
-- `anthropic`
-
-Examples:
+Install the generated tarball:
 
 ```bash
-node dist/src/cli/index.js config show
-node dist/src/cli/index.js config llm
-node dist/src/cli/index.js config llm use --provider openai --model gpt-5-mini --api-key "your-key"
-node dist/src/cli/index.js config llm list-models --provider gemini
-node dist/src/cli/index.js config companion list
-node dist/src/cli/index.js config companion --pack girlfriend
+npm install -g ./pawmemo-0.1.0.tgz
 ```
 
-Inside shell:
+Then launch it:
+
+```bash
+pawmemo
+```
+
+Notes:
+
+- `npm pack` builds `dist/` automatically before packing
+- the published package ships runtime files only, so the installed CLI can run immediately
+
+## Quick Start
+
+The shortest path is:
+
+```bash
+pawmemo
+```
+
+Inside the shell:
 
 ```text
-/model
-/model list
-/model use openai gpt-5-mini
+/help
+/review
+/rescue
+/stats
+/models
 /quit
 ```
+
+If you want an isolated scratch database while exploring:
+
+```bash
+pawmemo --db /tmp/pawmemo-dev.db
+```
+
+If your terminal has trouble with the full-screen interface:
+
+```bash
+pawmemo --line --db /tmp/pawmemo-dev.db
+```
+
+## First 3 Minutes
+
+No model is required for the local study loop. These commands work without LLM setup:
+
+```bash
+pawmemo capture luminous --ctx "The jellyfish gave off a luminous glow." --gloss "emitting light"
+pawmemo review
+pawmemo review session --limit 5
+pawmemo rescue
+pawmemo stats
+```
+
+If you want natural chat plus `ask` and `teach`, configure a provider first:
+
+```bash
+pawmemo config llm
+pawmemo config llm use --provider openai --model gpt-5-mini --api-key "your-key"
+```
+
+Then either stay in the shell:
+
+```bash
+pawmemo
+```
+
+Or call direct commands:
+
+```bash
+pawmemo ask luminous --ctx "The jellyfish gave off a luminous glow."
+pawmemo teach lucid --ctx "Her explanation was lucid and easy to follow."
+```
+
+## Shell Notes
+
+- `/models` opens an interactive provider and model picker inside the shell
+- `/model` shows or updates explicit model settings
+- `Tab`, arrow keys, and `Enter` work in the TUI picker flows
+- `Ctrl+C` in the TUI is a two-step exit confirmation
 
 ## Development
 

@@ -35,8 +35,12 @@ function describeAction(action: ShellAction): string {
       return `Explain ${action.input.word}`;
     case "capture":
       return `Save ${action.input.word} with an explicit gloss`;
+    case "teach-clarify-context":
+      return `Clarify how to build a card for ${action.input.word}`;
     case "teach":
       return `Add ${action.input.word} to the study plan`;
+    case "teach-confirm":
+      return `Confirm drafted card for ${action.input.word}`;
     case "review-session":
       return "Start review";
     case "rescue":

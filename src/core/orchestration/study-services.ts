@@ -14,6 +14,7 @@ import type {
   RescueCandidateResult,
   ReviewQueueResult,
   ReviewRevealResult,
+  TeachWordDraftResult,
   TeachWordInput,
   TeachWordResult
 } from "../domain/models";
@@ -28,6 +29,7 @@ import { GetRecoveryProjectionService } from "./get-recovery-projection";
 import { RescueService } from "./rescue-service";
 import { ReviewService } from "./review-service";
 import { TeachWordService } from "./teach-word";
+import type { TeachPerfHook } from "./teach-word";
 
 export class StudyServices {
   private readonly captureService: CaptureWordService;
@@ -57,12 +59,35 @@ export class StudyServices {
     return this.captureService.capture(input);
   }
 
-  ask(input: AskWordInput): Promise<AskWordResult> {
-    return this.askService.ask(input);
+  ask(
+    input: AskWordInput,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<AskWordResult> {
+    return this.askService.ask(input, options);
   }
 
-  teach(input: TeachWordInput): Promise<TeachWordResult> {
-    return this.teachService.teach(input);
+  teach(
+    input: TeachWordInput,
+    perfHook?: TeachPerfHook,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<TeachWordResult> {
+    return this.teachService.teach(input, perfHook, options);
+  }
+
+  draftTeach(
+    input: TeachWordInput,
+    perfHook?: TeachPerfHook,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<TeachWordDraftResult> {
+    return this.teachService.draft(input, perfHook, options);
+  }
+
+  confirmTeachDraft(
+    input: TeachWordInput,
+    draft: TeachWordDraftResult,
+    perfHook?: TeachPerfHook
+  ): TeachWordResult {
+    return this.teachService.confirmDraft(input, draft, perfHook);
   }
 
   getReviewQueue(input: GetReviewQueueInput = {}): ReviewQueueResult {
