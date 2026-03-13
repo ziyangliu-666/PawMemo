@@ -1,30 +1,25 @@
 # PawMemo
 
-PawMemo is a local-first vocabulary companion with a deterministic learning core and a TUI-first terminal shell.
+<p align="center">
+  <img src="./assets/readme/logo.png" alt="PawMemo logo" width="720">
+</p>
 
-Its core boundary is deliberate: companion tone can shape pacing, warmth, and return moments, but study truth still lives in explicit word state, retrieval, and spaced-review scheduling.
+LLM-native vocabulary companion for the terminal.
 
-## What It Does
+PawMemo is a terminal app for word learning with two fixed parts:
 
-- stores words, context, and glosses in SQLite
-- builds deterministic review cards
-- supports `review`, `review session`, `rescue`, `ask`, `teach`, `pet`, `stats`, and `shell`
-- keeps the learning engine separate from companion rendering
-- supports multiple companion packs without changing study truth
-- opens straight into the shell when you run `pawmemo`
+- character-style chat and teaching
+- FSRS-style spaced review with local study state
 
-## Current CLI Behavior
+It uses an LLM for the main product experience, while keeping word state, cards, and review progress in SQLite.
 
-- `pawmemo` opens the shell directly
-- in a real terminal, the default shell is the full-screen TUI
-- `pawmemo --line` forces the line-shell fallback
-- `pawmemo shell` is still available, but no longer required
-- the default database path is `.data/pawmemo.db` under the current working directory
-- `PAWMEMO_DB_PATH` or `--db /path/to/db.sqlite` can override that path
+Current positioning:
+
+- Anki-like vocabulary cards
+- an explicit FSRS-style scheduler direction
+- customizable character packs on top of one deterministic study system
 
 ## Install
-
-### From this repo for local development
 
 ```bash
 npm install
@@ -32,46 +27,44 @@ npm run build
 npm link
 ```
 
-Then launch PawMemo with:
+Run:
 
 ```bash
 pawmemo
 ```
 
-### From a packaged tarball
-
-Build the package:
+Or package it:
 
 ```bash
 npm pack
-```
-
-Install the generated tarball:
-
-```bash
 npm install -g ./pawmemo-0.1.0.tgz
-```
-
-Then launch it:
-
-```bash
 pawmemo
 ```
 
-Notes:
+## Setup
 
-- `npm pack` builds `dist/` automatically before packing
-- the published package ships runtime files only, so the installed CLI can run immediately
+PawMemo requires an LLM provider.
+
+```bash
+pawmemo config llm
+pawmemo config llm use --provider openai --model gpt-5-mini --api-key "your-key"
+```
 
 ## Quick Start
 
-The shortest path is:
+Capture a word:
+
+```bash
+pawmemo capture luminous --ctx "The jellyfish gave off a luminous glow." --gloss "emitting light"
+```
+
+Start the shell:
 
 ```bash
 pawmemo
 ```
 
-Inside the shell:
+Common commands:
 
 ```text
 /help
@@ -82,60 +75,177 @@ Inside the shell:
 /quit
 ```
 
-If you want an isolated scratch database while exploring:
+Direct commands:
+
+```bash
+pawmemo ask luminous --ctx "The jellyfish gave off a luminous glow."
+pawmemo teach lucid --ctx "Her explanation was lucid and easy to follow."
+pawmemo review
+pawmemo rescue
+pawmemo stats
+```
+
+Use a temporary database while testing:
 
 ```bash
 pawmemo --db /tmp/pawmemo-dev.db
 ```
 
-If your terminal has trouble with the full-screen interface:
+Use line mode if full-screen TUI does not work well in your terminal:
 
 ```bash
 pawmemo --line --db /tmp/pawmemo-dev.db
 ```
 
-## First 3 Minutes
+Default landing view:
 
-No model is required for the local study loop. These commands work without LLM setup:
+![PawMemo shell landing view](./assets/readme/shell-landing.png)
 
-```bash
-pawmemo capture luminous --ctx "The jellyfish gave off a luminous glow." --gloss "emitting light"
-pawmemo review
-pawmemo review session --limit 5
-pawmemo rescue
-pawmemo stats
+## Main Commands
+
+* `pawmemo` — open the shell
+* `capture` — save a word, context, and gloss
+* `review` — run review
+* `rescue` — recover one overdue item
+* `ask` — explain a word in context
+* `teach` — teach and save into study state
+* `stats` — show study progress
+* `pet` — show companion status
+
+Example explanation card in the shell:
+
+![PawMemo explanation card](./assets/readme/explanation-card.png)
+
+## Companion Packs
+
+Built-in packs:
+
+* `momo`
+* `girlfriend` (`Mina`)
+* `tsundere` (`Airi`)
+
+Preview tone snapshots:
+
+`momo`
+
+```text
+> 你好
+
+• 你好！很高兴见到你。
 ```
 
-If you want natural chat plus `ask` and `teach`, configure a provider first:
+`girlfriend` / `Mina`
 
-```bash
-pawmemo config llm
-pawmemo config llm use --provider openai --model gpt-5-mini --api-key "your-key"
+```text
+> 你好
+
+• 你好呀。我在这里，准备好了。
 ```
 
-Then either stay in the shell:
+`tsundere` / `Airi`
 
-```bash
-pawmemo
+```text
+> 你好
+
+• 哦，你终于来了。别在那打招呼了，赶紧把剩下的4个复习完，我可没时间一直陪你耗着。
 ```
 
-Or call direct commands:
+Examples:
 
 ```bash
-pawmemo ask luminous --ctx "The jellyfish gave off a luminous glow."
-pawmemo teach lucid --ctx "Her explanation was lucid and easy to follow."
+pawmemo config companion list
+pawmemo config companion --pack tsundere
+pawmemo pet --pack tsundere
 ```
 
-## Shell Notes
+## Architecture
 
-- `/models` opens an interactive provider and model picker inside the shell
-- `/model` shows or updates explicit model settings
-- `Tab`, arrow keys, and `Enter` work in the TUI picker flows
-- `Ctrl+C` in the TUI is a two-step exit confirmation
+PawMemo is structured around one local study engine that both the shell and direct CLI commands use.
+
+The core architecture today is:
+
+- explicit study state stored in SQLite
+- Anki-style recognition and cloze cards
+- a deterministic, stability-aware, FSRS-style scheduler direction
+- LLM-assisted explanation and teaching on top of the same saved word state
+- companion packs layered downstream of study truth rather than owning it
+
+So the shortest accurate description is:
+
+- a local-first vocabulary CLI
+- with Anki-style cards
+- an FSRS-style review engine
+- and customizable companion roles
+
+More precise wording:
+
+- PawMemo is not claiming to be a drop-in FSRS implementation
+- it is claiming the current scheduler is PawMemo's own explicit implementation, designed in an FSRS-style direction rather than as ad hoc cooldown timers
+- companion packs can change tone, copy, and presentation, but they do not change review scheduling or canonical study state
+
+Layered architecture overview:
+
+![PawMemo architecture overview](./assets/readme/structure.png)
+
+```mermaid
+graph TD
+    subgraph Surface["Surface Layer"]
+        TUI["TUI Shell"]
+        LINE["Line Shell"]
+        CLI["CLI Commands"]
+    end
+
+    subgraph App["Application Layer"]
+        STUDY["StudyServices"]
+        EXEC["ShellActionExecutor"]
+    end
+
+    subgraph Learning["Learning Core"]
+        CAP["Capture"]
+        ASK["Ask / Teach"]
+        REVIEW["Review Service"]
+        SESSION["Review Session"]
+        SCHED["Scheduler"]
+        CARDS["Card Builder"]
+    end
+
+    subgraph Companion["Companion Layer"]
+        SIGNALS["Companion Signals"]
+        PACKS["Companion Packs"]
+        RENDER["Companion Renderer"]
+    end
+
+    subgraph Infra["Infrastructure"]
+        DB["SQLite"]
+        LLM["LLM Providers"]
+    end
+
+    TUI --> EXEC
+    LINE --> EXEC
+    CLI --> STUDY
+    EXEC --> STUDY
+    TUI --> RENDER
+
+    STUDY --> CAP
+    STUDY --> ASK
+    STUDY --> REVIEW
+    STUDY --> SIGNALS
+
+    REVIEW --> SESSION
+    SESSION --> SCHED
+    CAP --> CARDS
+
+    CAP --> DB
+    CARDS --> DB
+    SESSION --> DB
+    SIGNALS --> DB
+    ASK --> LLM
+
+    SIGNALS --> RENDER
+    PACKS --> RENDER
+```
 
 ## Development
-
-Useful commands:
 
 ```bash
 npm run build
@@ -144,32 +254,15 @@ npm run lint
 npm test
 ```
 
-Repository layout:
-
-- `doc/`: product brief, architecture, implementation plan, decisions, progress
-- `src/cli/`: CLI commands, shell runner, shell surface, TUI work
-- `src/core/`: domain and orchestration
-- `src/storage/`: SQLite database and repositories
-- `src/review/`: card generation and review scheduling logic
-- `src/companion/`: companion packs, reactions, rendering
-- `test/`: integration and focused unit coverage
-
-## Contributing
-
-This repo is docs-first.
-
-Before substantial work:
-
-1. read `doc/00-index.md`
-2. check `doc/10-progress.md`
-3. check `doc/09-decision-log.md`
-
-Working expectations:
-
-- keep docs ahead of code
-- keep scheduling deterministic
-- keep companion behavior downstream of study truth
-- avoid undocumented architectural drift
+```text
+assets/readme/     README images
+src/cli/          shell and commands
+src/core/         domain logic
+src/storage/      SQLite storage
+src/review/       cards and scheduler
+src/companion/    packs and rendering
+test/             tests
+```
 
 ## License
 

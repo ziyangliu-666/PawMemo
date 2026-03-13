@@ -8,6 +8,7 @@
   },
   "files": [
     "dist/src",
+    "assets/readme",
     "README.md",
     "LICENSE"
   ],
