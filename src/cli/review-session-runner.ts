@@ -39,6 +39,7 @@ export interface ReviewSessionTerminal {
     intent?: StudyCellIntent
   ): void;
   prompt(promptText: string): Promise<string>;
+  setMode?(mode: string): void;
   close(): Promise<void> | void;
 }
 
@@ -262,6 +263,7 @@ export class ReviewSessionRunner {
           typeof options.limit === "number" &&
           reviewedCount >= options.limit
         ) {
+          this.terminal.setMode?.("Summary");
           const paused = this.copy.sessionPaused(reviewedCount);
           this.writeDataBlock(paused.text, paused.kind, {
             kind: "review-summary",
@@ -279,6 +281,7 @@ export class ReviewSessionRunner {
         const nextCard = this.services.getNext(options.now);
 
         if (!nextCard) {
+          this.terminal.setMode?.("Summary");
           const done = this.copy.noDueCards(reviewedCount);
           this.writeDataBlock(done.text, done.kind, {
             kind: "review-summary",
@@ -293,6 +296,7 @@ export class ReviewSessionRunner {
           };
         }
 
+        this.terminal.setMode?.("Review");
         this.printCard(nextCard, reviewedCount + 1);
 
         const revealAction = (await this.terminal.prompt(
@@ -302,6 +306,7 @@ export class ReviewSessionRunner {
           .toLowerCase();
 
         if (revealAction === "q" || revealAction === "quit") {
+          this.terminal.setMode?.("Summary");
           const endedEarly = this.copy.sessionEndedEarly(reviewedCount);
           this.writeDataBlock(endedEarly.text, endedEarly.kind, {
             kind: "review-summary",
@@ -316,6 +321,7 @@ export class ReviewSessionRunner {
           };
         }
 
+        this.terminal.setMode?.("Reveal");
         const reveal = this.services.reveal(nextCard.id);
         this.printReveal(reveal);
 
@@ -326,6 +332,7 @@ export class ReviewSessionRunner {
           const normalized = gradeInput.trim().toLowerCase();
 
           if (normalized === "q" || normalized === "quit") {
+            this.terminal.setMode?.("Summary");
             const endedEarly = this.copy.sessionEndedEarly(reviewedCount);
             this.writeDataBlock(endedEarly.text, endedEarly.kind, {
               kind: "review-summary",

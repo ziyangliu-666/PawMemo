@@ -283,6 +283,7 @@ export class ShellRunner {
 
   private renderCompanion(): void {
     const status = this.getStatusSignals();
+    this.surface.setMode?.("Chat", status.dueCount);
     this.surface.renderCompanionLine(
       renderCompanionPresenceLine(this.activePack, {
         mood: this.shellState.mood,

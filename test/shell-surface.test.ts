@@ -39,11 +39,7 @@ test("LineShellSurface renders the shell header and intro copy", () => {
 
   surface.beginShell("Momo");
 
-  assert.equal(terminal.writes[0], "PawMemo shell (Momo)");
-  assert.match(
-    terminal.writes[1] ?? "",
-    /Talk to me naturally/i
-  );
+  assert.equal(terminal.writes[0], "Momo · Chat");
 });
 
 test("LineShellSurface streams assistant replies when raw writes are available", async () => {
@@ -96,9 +92,8 @@ test("TuiShellSurface enters alternate screen and renders a four-part shell fram
 
   const output = terminal.rawWrites.join("");
   assert.ok(output.includes("\u001b[?1049h"));
-  assert.match(output, /PawMemo Shell \(Momo\)/);
-  assert.match(output, /paw> █/);
-  assert.match(output, /Status {2}Ready\. Natural chat/i);
+  assert.match(output, /Momo · Chat/);
+  assert.match(output, /› █/);
   assert.match(output, /Hello from transcript/);
   assert.ok(output.includes("\u001b[?1049l"));
 });

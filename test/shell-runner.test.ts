@@ -216,7 +216,7 @@ test("ShellRunner can render with a romance-coded companion pack", async () => {
     await runner.run();
 
     assert.ok(
-      terminal.writes.some((line) => line.includes("PawMemo shell (Airi)")),
+      terminal.writes.some((line) => line.includes("Airi · Chat")),
       "expected shell header to include active pack display name"
     );
     assert.ok(

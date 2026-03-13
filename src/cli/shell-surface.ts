@@ -13,7 +13,7 @@ import {
 
 const SHELL_STREAM_DELAY_MS = 18;
 const SHELL_WAIT_FRAME_MS = 250;
-const DEFAULT_SHELL_PROMPT = "paw> ";
+const DEFAULT_SHELL_PROMPT = "› ";
 const WAITING_FRAMES = ["[U.  ]", "[ U. ]", "[  U.]", "[ U. ]"];
 const ANSI_CLEAR_LINE = "\r\u001b[2K";
 const ANSI_CLEAR_SCREEN = "\u001b[2J\u001b[H";
@@ -43,11 +43,18 @@ export interface ShellTerminal extends ReviewSessionTerminal {
 export class ReadlineShellTerminal implements ShellTerminal {
   readonly supportsColor = shouldUseColor(output);
 
-  private readonly readline = createInterface({
-    input,
-    output,
-    terminal: Boolean(input.isTTY && output.isTTY)
-  });
+  private _readline: ReturnType<typeof createInterface> | undefined;
+
+  private get readline() {
+    if (!this._readline) {
+      this._readline = createInterface({
+        input,
+        output,
+        terminal: Boolean(input.isTTY && output.isTTY)
+      });
+    }
+    return this._readline;
+  }
 
   write(text: string): void {
     output.write(`${text}\n`);
@@ -62,7 +69,7 @@ export class ReadlineShellTerminal implements ShellTerminal {
   }
 
   close(): void {
-    this.readline.close();
+    this._readline?.close();
   }
 }
 
@@ -85,6 +92,7 @@ export interface ShellSurface {
     study?: StudyCellIntent
   ): void;
   createReviewSessionTerminal(): ReviewSessionTerminal;
+  setMode?(mode: string, dueCount?: number): void;
   close(): Promise<void> | void;
 }
 
@@ -190,45 +198,7 @@ function wrapDisplayText(text: string, maxWidth: number): string[] {
   return lines.length > 0 ? lines : [normalized];
 }
 
-function tokenizeComposerInput(value: string): string[] {
-  const tokens: string[] = [];
-  let index = 0;
 
-  while (index < value.length) {
-    const remaining = value.slice(index);
-
-    if (remaining.startsWith("\u001b[3~")) {
-      tokens.push("\u001b[3~");
-      index += 4;
-      continue;
-    }
-
-    const mouseMatch = remaining.match(/^\u001b\[<[0-9;]+[mM]/);
-    if (mouseMatch) {
-      tokens.push(mouseMatch[0] as string);
-      index += (mouseMatch[0] as string).length;
-      continue;
-    }
-
-    if (
-      remaining.startsWith("\u001b[D") ||
-      remaining.startsWith("\u001b[C") ||
-      remaining.startsWith("\u001b[H") ||
-      remaining.startsWith("\u001b[F") ||
-      remaining.startsWith("\u001bOH") ||
-      remaining.startsWith("\u001bOF")
-    ) {
-      tokens.push(remaining.slice(0, 3));
-      index += 3;
-      continue;
-    }
-
-    tokens.push(value[index] ?? "");
-    index += 1;
-  }
-
-  return tokens.filter((token) => token.length > 0);
-}
 
 export class LineShellSurface implements ShellSurface {
   readonly supportsColor?: boolean;
@@ -247,10 +217,12 @@ export class LineShellSurface implements ShellSurface {
   }
 
   beginShell(displayName: string): void {
-    this.terminal.write(this.theme.heading(`PawMemo shell (${displayName})`));
-    this.terminal.write(
-      this.theme.muted("Talk to me naturally. If adding a word feels uncertain, I'll ask before I save it.")
-    );
+    this.terminal.write(this.theme.heading(`${displayName} · Chat`));
+  }
+
+  setMode(mode: string, dueCount?: number): void {
+    void mode;
+    void dueCount;
   }
 
   prompt(): Promise<string> {
@@ -357,6 +329,7 @@ export class LineShellSurface implements ShellSurface {
   createReviewSessionTerminal(): ReviewSessionTerminal {
     return {
       supportsColor: this.supportsColor,
+      setMode: (mode: string) => this.setMode(mode),
       write: (text: string) => {
         this.terminal.write(text);
       },
@@ -394,6 +367,18 @@ export class LineShellSurface implements ShellSurface {
   }
 }
 
+const KNOWN_COMMANDS = [
+  { name: "/review", description: "review your due cards" },
+  { name: "/rescue", description: "rescue an overdue card" },
+  { name: "/stats", description: "view your study statistics" },
+  { name: "/capture", description: "capture a new word" },
+  { name: "/ask", description: "ask a question about a concept" },
+  { name: "/model", description: "choose what model and reasoning effort to use" },
+  { name: "/pet", description: "interact with your companion" },
+  { name: "/help", description: "show general help commands" },
+  { name: "/quit", description: "leave the shell" }
+];
+
 export class TuiShellSurface implements ShellSurface {
   readonly supportsColor?: boolean;
 
@@ -408,10 +393,25 @@ export class TuiShellSurface implements ShellSurface {
   private composerBuffer = "";
   private composerCursor = 0;
   private transcriptScrollOffset = 0;
+  private activeCompanionLine: string | null = null;
   private displayName = "PawMemo";
-  private introText =
-    "Talk to me naturally. If adding a word feels uncertain, I'll ask before I save it.";
   private active = false;
+  private shellMode = "Chat";
+  private dueCount = 0;
+  private slashSuggestions: string[] = [];
+  private suggestionIndex = 0;
+  private promptResolver: ((input: string) => void) | null = null;
+  private inputBuffer = "";
+  private blinkState = true;
+  private blinkTimer: NodeJS.Timeout | null = null;
+
+  setMode(mode: string, dueCount?: number): void {
+    this.shellMode = mode;
+    if (dueCount !== undefined) {
+      this.dueCount = dueCount;
+    }
+    this.renderFrame();
+  }
 
   constructor(private readonly terminal: ShellTerminal) {
     this.supportsColor = terminal.supportsColor;
@@ -439,8 +439,193 @@ export class TuiShellSurface implements ShellSurface {
     this.terminal.writeRaw?.(
       `${ANSI_ALT_SCREEN_ON}${ANSI_MOUSE_TRACKING_ON}${ANSI_HIDE_CURSOR}${ANSI_CLEAR_SCREEN}`
     );
+    if (this.canUseInlineComposer()) {
+      process.stdin.setRawMode?.(true);
+      process.stdin.resume();
+      process.stdin.on("data", this.onGlobalData);
+    }
     this.renderFrame();
+    this.blinkTimer = setInterval(() => {
+      this.blinkState = !this.blinkState;
+      this.renderFrame();
+    }, 500);
   }
+
+  private readonly onGlobalData = (chunk: Buffer | string): void => {
+    this.inputBuffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+
+    // Continuously extract complete tokens from the inputBuffer
+    while (this.inputBuffer.length > 0) {
+      // 1. Check for complete or partial escape sequences
+      if (this.inputBuffer.startsWith("\u001b")) {
+        // Known complete sequences
+        if (this.inputBuffer.startsWith("\u001b[3~")) {
+          this.deleteAfterCursor();
+          this.inputBuffer = this.inputBuffer.slice(4);
+          continue;
+        }
+
+        // eslint-disable-next-line no-control-regex
+        const mouseMatch = this.inputBuffer.match(/^\u001b\[<([0-9;]+)[mM]/);
+        if (mouseMatch) {
+          const fullMatch = mouseMatch[0];
+          if (fullMatch.startsWith("\u001b[<64;")) {
+            this.scrollTranscriptUp();
+          } else if (fullMatch.startsWith("\u001b[<65;")) {
+            this.scrollTranscriptDown();
+          }
+          // Ignore other mouse clicks or drags
+          this.inputBuffer = this.inputBuffer.slice(fullMatch.length);
+          continue;
+        }
+
+        // eslint-disable-next-line no-control-regex
+        const csiMatch = this.inputBuffer.match(/^\u001b\[[0-9;]*[a-zA-Z]/);
+        if (csiMatch) {
+          const fullMatch = csiMatch[0];
+          switch (fullMatch) {
+            case "\u001b[D": this.moveCursorLeft(); break;
+            case "\u001b[C": this.moveCursorRight(); break;
+            case "\u001b[H": this.moveCursorHome(); break;
+            case "\u001b[F": this.moveCursorEnd(); break;
+            case "\u001b[5~": this.scrollTranscriptUp(10); break;
+            case "\u001b[6~": this.scrollTranscriptDown(10); break;
+            case "\u001b[A":
+              if (this.slashSuggestions.length > 0) {
+                this.suggestionIndex = (this.suggestionIndex - 1 + this.slashSuggestions.length) % this.slashSuggestions.length;
+                this.renderFrame();
+              } else {
+                this.scrollTranscriptUp(1);
+              }
+              break;
+            case "\u001b[B":
+              if (this.slashSuggestions.length > 0) {
+                this.suggestionIndex = (this.suggestionIndex + 1) % this.slashSuggestions.length;
+                this.renderFrame();
+              } else {
+                this.scrollTranscriptDown(1);
+              }
+              break;
+          }
+          this.inputBuffer = this.inputBuffer.slice(fullMatch.length);
+          continue;
+        }
+
+        // eslint-disable-next-line no-control-regex
+        const ss3Match = this.inputBuffer.match(/^\u001bO[a-zA-Z]/);
+        if (ss3Match) {
+          const fullMatch = ss3Match[0];
+          switch (fullMatch) {
+            case "\u001bOH": this.moveCursorHome(); break;
+            case "\u001bOF": this.moveCursorEnd(); break;
+          }
+          this.inputBuffer = this.inputBuffer.slice(fullMatch.length);
+          continue;
+        }
+
+        // If it starts with ESC but doesn't match a complete sequence,
+        // we must wait for more data to arrive in the next chunk.
+        // If the buffer is getting too long (e.g. garbage), flush it.
+        if (this.inputBuffer.length < 16) {
+          break;
+        } else {
+          this.inputBuffer = this.inputBuffer.slice(1);
+          continue;
+        }
+      }
+
+      // 2. Process regular characters
+      const token = this.inputBuffer[0];
+      this.inputBuffer = this.inputBuffer.slice(1);
+
+      switch (token) {
+        case "\r":
+        case "\n": {
+          if (!this.promptResolver) {
+            break;
+          }
+
+          if (this.slashSuggestions.length > 0) {
+            this.composerBuffer = this.slashSuggestions[this.suggestionIndex] + " ";
+            this.composerCursor = this.composerBuffer.length;
+            this.updateAutocompleteState();
+            this.renderFrame();
+            break;
+          }
+
+          const submitted = this.composerBuffer;
+          if (submitted.trim().length === 0) {
+            break;
+          }
+
+          const resolver = this.promptResolver;
+          this.promptResolver = null;
+          this.composerBuffer = "";
+          this.composerCursor = 0;
+          this.suggestionIndex = 0;
+          this.slashSuggestions = [];
+
+          this.appendEntry({ kind: "user-line", text: submitted });
+          resolver(submitted);
+          return;
+        }
+        case "\t": {
+          if (this.slashSuggestions.length > 0) {
+            this.composerBuffer = this.slashSuggestions[this.suggestionIndex] + " ";
+            this.composerCursor = this.composerBuffer.length;
+            this.updateAutocompleteState();
+            this.renderFrame();
+          }
+          break;
+        }
+        case "\u0003": { // Ctrl+C
+          if (this.promptResolver) {
+            const resolver = this.promptResolver;
+            this.promptResolver = null;
+            this.composerBuffer = "/quit";
+            this.composerCursor = 0;
+            this.suggestionIndex = 0;
+            this.slashSuggestions = [];
+            this.transcriptScrollOffset = 0;
+            this.renderFrame();
+            resolver("/quit");
+          } else {
+            // Global Ctrl+C handler outside of prompt
+            void this.close();
+            process.exit(0);
+          }
+          return;
+        }
+        case "\u0004": { // Ctrl+D
+          if (!this.promptResolver && !this.composerBuffer) {
+              void this.close();
+              process.exit(0);
+          }
+          break;
+        }
+        case "\u007f":
+        case "\b": {
+          this.deleteBeforeCursor();
+          break;
+        }
+        case "\u001b": {
+          if (this.slashSuggestions.length > 0) {
+            this.slashSuggestions = [];
+            this.suggestionIndex = 0;
+            this.renderFrame();
+          } else {
+            this.composerBuffer = "";
+            this.composerCursor = 0;
+            this.renderFrame();
+          }
+          break;
+        }
+        default: {
+          this.insertAtCursor(token);
+        }
+      }
+    }
+  };
 
   prompt(): Promise<string> {
     return this.promptWithLabel(DEFAULT_SHELL_PROMPT);
@@ -451,7 +636,8 @@ export class TuiShellSurface implements ShellSurface {
   }
 
   renderCompanionLine(text: string): void {
-    this.appendEntry({ kind: "companion-line", text });
+    this.activeCompanionLine = text;
+    this.renderFrame();
   }
 
   showWaitingIndicator(label: string, text: string): void {
@@ -541,6 +727,7 @@ export class TuiShellSurface implements ShellSurface {
   createReviewSessionTerminal(): ReviewSessionTerminal {
     return {
       supportsColor: this.supportsColor,
+      setMode: (mode: string) => this.setMode(mode),
       write: (text: string) => {
         this.appendEntry({
           kind: "data",
@@ -563,7 +750,16 @@ export class TuiShellSurface implements ShellSurface {
 
   close(): Promise<void> | void {
     this.clearWaitingIndicator();
+    if (this.blinkTimer) {
+      clearInterval(this.blinkTimer);
+      this.blinkTimer = null;
+    }
     if (this.active) {
+      if (this.canUseInlineComposer()) {
+        process.stdin.off("data", this.onGlobalData);
+        process.stdin.setRawMode?.(false);
+        process.stdin.pause();
+      }
       this.terminal.writeRaw?.(`${ANSI_SHOW_CURSOR}${ANSI_MOUSE_TRACKING_OFF}${ANSI_ALT_SCREEN_OFF}`);
       this.active = false;
     }
@@ -608,128 +804,8 @@ export class TuiShellSurface implements ShellSurface {
   }
 
   private async promptWithInlineComposer(): Promise<string> {
-    const stdin = process.stdin;
-    const previousRawMode = stdin.isRaw;
-    stdin.setRawMode?.(true);
-    stdin.resume();
-
-    let streamBuffer = "";
-
     return await new Promise<string>((resolve) => {
-      const onData = (chunk: Buffer | string): void => {
-        streamBuffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
-
-        // Continuously extract complete tokens from the streamBuffer
-        while (streamBuffer.length > 0) {
-          // 1. Check for complete or partial escape sequences
-          if (streamBuffer.startsWith("\u001b")) {
-            // Known complete sequences
-            if (streamBuffer.startsWith("\u001b[3~")) {
-              this.deleteAfterCursor();
-              streamBuffer = streamBuffer.slice(4);
-              continue;
-            }
-
-            const mouseMatch = streamBuffer.match(/^\u001b\[<([0-9;]+)[mM]/);
-            if (mouseMatch) {
-              const fullMatch = mouseMatch[0] as string;
-              if (fullMatch.startsWith("\u001b[<64;")) {
-                this.scrollTranscriptUp();
-              } else if (fullMatch.startsWith("\u001b[<65;")) {
-                this.scrollTranscriptDown();
-              }
-              // Ignore other mouse clicks or drags
-              streamBuffer = streamBuffer.slice(fullMatch.length);
-              continue;
-            }
-
-            const csiMatch = streamBuffer.match(/^\u001b\[[0-9;]*[a-zA-Z]/);
-            if (csiMatch) {
-                const fullMatch = csiMatch[0] as string;
-                switch (fullMatch) {
-                    case "\u001b[D": this.moveCursorLeft(); break;
-                    case "\u001b[C": this.moveCursorRight(); break;
-                    case "\u001b[H": this.moveCursorHome(); break;
-                    case "\u001b[F": this.moveCursorEnd(); break;
-                    case "\u001b[5~": this.scrollTranscriptUp(10); break;
-                    case "\u001b[6~": this.scrollTranscriptDown(10); break;
-                    case "\u001b[A": this.scrollTranscriptUp(1); break;
-                    case "\u001b[B": this.scrollTranscriptDown(1); break;
-                }
-                streamBuffer = streamBuffer.slice(fullMatch.length);
-                continue;
-            }
-
-            const ss3Match = streamBuffer.match(/^\u001bO[a-zA-Z]/);
-            if (ss3Match) {
-                const fullMatch = ss3Match[0] as string;
-                switch (fullMatch) {
-                    case "\u001bOH": this.moveCursorHome(); break;
-                    case "\u001bOF": this.moveCursorEnd(); break;
-                }
-                streamBuffer = streamBuffer.slice(fullMatch.length);
-                continue;
-            }
-
-            // If it starts with ESC but doesn't match a complete sequence,
-            // we must wait for more data to arrive in the next chunk.
-            // If the buffer is getting too long (e.g. garbage), flush it.
-            if (streamBuffer.length < 16) {
-                break;
-            } else {
-                streamBuffer = streamBuffer.slice(1);
-                continue;
-            }
-          }
-
-          // 2. Process regular characters
-          const token = streamBuffer[0] as string;
-          streamBuffer = streamBuffer.slice(1);
-
-          switch (token) {
-            case "\r":
-            case "\n": {
-              cleanup();
-              const submitted = this.composerBuffer;
-              this.composerBuffer = "";
-              this.composerCursor = 0;
-              this.transcriptScrollOffset = 0;
-              this.renderFrame();
-              resolve(submitted);
-              return;
-            }
-            case "\u0003": {
-              cleanup();
-              this.composerBuffer = "/quit";
-              this.composerCursor = 0;
-              this.transcriptScrollOffset = 0;
-              this.renderFrame();
-              resolve("/quit");
-              return;
-            }
-            case "\u007f":
-            case "\b": {
-              this.deleteBeforeCursor();
-              break;
-            }
-            case "\u001b": {
-                // This shouldn't happen in the loop because we check startsWithESC above,
-                // but if an ESC is stuck, skip it to avoid breaking the input.
-                break;
-            }
-            default: {
-              this.insertAtCursor(token);
-            }
-          }
-        }
-      };
-
-      const cleanup = (): void => {
-        stdin.off("data", onData);
-        stdin.setRawMode?.(previousRawMode ?? false);
-      };
-
-      stdin.on("data", onData);
+      this.promptResolver = resolve;
     });
   }
 
@@ -740,8 +816,21 @@ export class TuiShellSurface implements ShellSurface {
 
     this.composerBuffer = `${this.composerBuffer.slice(0, this.composerCursor)}${text}${this.composerBuffer.slice(this.composerCursor)}`;
     this.composerCursor += text.length;
+    this.updateAutocompleteState();
     this.transcriptScrollOffset = 0;
+    this.resetBlink();
     this.renderFrame();
+  }
+
+  private resetBlink(): void {
+    this.blinkState = true;
+    if (this.blinkTimer) {
+      clearInterval(this.blinkTimer);
+      this.blinkTimer = setInterval(() => {
+        this.blinkState = !this.blinkState;
+        this.renderFrame();
+      }, 500);
+    }
   }
 
   private deleteBeforeCursor(): void {
@@ -751,6 +840,8 @@ export class TuiShellSurface implements ShellSurface {
 
     this.composerBuffer = `${this.composerBuffer.slice(0, this.composerCursor - 1)}${this.composerBuffer.slice(this.composerCursor)}`;
     this.composerCursor -= 1;
+    this.updateAutocompleteState();
+    this.resetBlink();
     this.renderFrame();
   }
 
@@ -760,7 +851,21 @@ export class TuiShellSurface implements ShellSurface {
     }
 
     this.composerBuffer = `${this.composerBuffer.slice(0, this.composerCursor)}${this.composerBuffer.slice(this.composerCursor + 1)}`;
+    this.updateAutocompleteState();
+    this.resetBlink();
     this.renderFrame();
+  }
+
+  private updateAutocompleteState(): void {
+    const buffer = this.composerBuffer;
+    if (buffer.startsWith("/") && buffer.length > 0) {
+      const matchPrefix = buffer.toLowerCase();
+      this.slashSuggestions = KNOWN_COMMANDS.filter(cmd => cmd.name.startsWith(matchPrefix)).map(c => c.name);
+      this.suggestionIndex = 0;
+    } else {
+      this.slashSuggestions = [];
+      this.suggestionIndex = 0;
+    }
   }
 
   private scrollTranscriptUp(count = 3): void {
@@ -779,6 +884,7 @@ export class TuiShellSurface implements ShellSurface {
     }
 
     this.composerCursor -= 1;
+    this.resetBlink();
     this.renderFrame();
   }
 
@@ -788,16 +894,19 @@ export class TuiShellSurface implements ShellSurface {
     }
 
     this.composerCursor += 1;
+    this.resetBlink();
     this.renderFrame();
   }
 
   private moveCursorHome(): void {
     this.composerCursor = 0;
+    this.resetBlink();
     this.renderFrame();
   }
 
   private moveCursorEnd(): void {
     this.composerCursor = this.composerBuffer.length;
+    this.resetBlink();
     this.renderFrame();
   }
 
@@ -809,31 +918,36 @@ export class TuiShellSurface implements ShellSurface {
     const columns = process.stdout.columns ?? DEFAULT_TUI_COLUMNS;
     const rows = process.stdout.rows ?? DEFAULT_TUI_ROWS;
     const headerLines = this.renderHeader(columns);
-    const tipLines = this.renderTip(columns);
-    const statusHeight = 1;
+    const tipLines = this.renderTip();
+    const statusLines = this.renderStatusLine(columns);
     const composerLines = this.renderComposer(columns);
-    const footerLines = this.renderFooter();
+    const footerLines = this.renderFooter(columns);
+    const separatorLine = this.theme.muted("─".repeat(columns));
     const occupiedHeight =
       headerLines.length +
+      1 + // Top separator
       tipLines.length +
-      statusHeight +
+      1 + // Above interactive separator
+      statusLines.length +
       composerLines.length +
+      (footerLines.length > 0 ? 1 : 0) + // Below interactive separator
       footerLines.length;
     const transcriptHeight = Math.max(
       4,
       rows - occupiedHeight
     );
 
-    const statusLine = this.renderStatusLine(columns);
     const transcriptLines = this.renderTranscript(columns, transcriptHeight);
 
     const frame = [
       ...headerLines,
+      separatorLine,
       ...tipLines,
       ...transcriptLines,
-      statusLine,
-      ...composerLines
-      ,
+      separatorLine,
+      ...statusLines,
+      ...composerLines,
+      ...(footerLines.length > 0 ? [separatorLine] : []),
       ...footerLines
     ]
       .slice(0, rows)
@@ -844,16 +958,29 @@ export class TuiShellSurface implements ShellSurface {
 
   private renderTranscript(columns: number, height: number): string[] {
     const snapshot = this.transcript.snapshot();
-    const rendered = snapshot.committedCells.flatMap((cell) =>
-      this.renderCellLines(cell, columns)
-    );
 
-    if (snapshot.activeCell && snapshot.activeCell.text.trim().length > 0) {
-      rendered.push(...this.renderCellLines({
-        id: 0,
-        kind: snapshot.activeCell.kind,
-        text: snapshot.activeCell.text
-      }, columns));
+    let rendered: string[] = [];
+
+    if (this.shellMode === "Review" || this.shellMode === "Reveal" || this.shellMode === "Summary") {
+      rendered = this.renderTranscriptWithReviewPanel(snapshot.committedCells, columns);
+    } else {
+      rendered = snapshot.committedCells.flatMap((cell, i) => {
+        const lines = this.renderCellLines(cell, columns);
+        const prevCell = snapshot.committedCells[i - 1];
+        const isConsecutiveStudy = i > 0 && cell.study && prevCell?.study;
+        return (i > 0 && !isConsecutiveStudy) ? ["", ...lines] : lines;
+      });
+
+      if (snapshot.activeCell && snapshot.activeCell.text.trim().length > 0) {
+        if (rendered.length > 0) {
+           rendered.push("");
+        }
+        rendered.push(...this.renderCellLines({
+          id: 0,
+          kind: snapshot.activeCell.kind,
+          text: snapshot.activeCell.text
+        }, columns));
+      }
     }
 
     if (rendered.length === 0) {
@@ -866,6 +993,9 @@ export class TuiShellSurface implements ShellSurface {
         )
       );
     }
+
+    // Add a trailing blank line to ensure transcript content never touches the composer directly
+    rendered.push("");
 
     const innerHeight = Math.max(1, height);
     const maxScroll = Math.max(0, rendered.length - innerHeight);
@@ -880,7 +1010,7 @@ export class TuiShellSurface implements ShellSurface {
       () => ""
     );
 
-    return [...tail, ...padding];
+    return [...padding, ...tail];
   }
 
   private renderCellLines(entry: ShellTranscriptCell, columns: number): string[] {
@@ -896,45 +1026,47 @@ export class TuiShellSurface implements ShellSurface {
           case "companion-card":
             output.push(
               sourceIndex === 0 && wrappedIndex === 0
-                ? `${this.theme.heading("•")} ${this.theme.heading(line)}`
-                : `  ${line}`
+                ? this.theme.heading(line)
+                : line
             );
             break;
           case "companion-line":
             output.push(
               sourceIndex === 0 && wrappedIndex === 0
-                ? `${this.theme.companionLine("•")} ${this.theme.companionLine(line)}`
-                : `  ${this.theme.companionLine(line)}`
+                ? this.theme.companionLine(line)
+                : this.theme.companionLine(line)
             );
             break;
           case "assistant":
             output.push(
               sourceIndex === 0 && wrappedIndex === 0
-                ? `${this.theme.status("•")} ${line}`
+                ? `• ${line}`
                 : `  ${line}`
             );
             break;
-          case "user-line":
-            output.push(
-              sourceIndex === 0 && wrappedIndex === 0
-                ? `${this.theme.prompt("›")} ${line}`
-                : `  ${line}`
-            );
+          case "user-line": {
+            const prefix = sourceIndex === 0 && wrappedIndex === 0 ? "› " : "  ";
+            const visibleW = visibleDisplayWidth(`${prefix}${line}`);
+            const padR = Math.max(0, columns - visibleW);
+            output.push(this.theme.userLineBg(`${prefix}${line}${" ".repeat(padR)}`));
             break;
+          }
           case "help":
-            output.push(
-                sourceIndex === 0 && wrappedIndex === 0
-                  ? `${this.theme.muted("?")} ${this.theme.muted(line)}`
-                  : `  ${this.theme.muted(line)}`
-            );
+            output.push(this.theme.muted(line));
             break;
-          case "data":
-            output.push(
-              sourceIndex === 0 && wrappedIndex === 0
-                ? (entry.study ? this.renderStudyLine(entry.study, line, sourceIndex, wrappedIndex) : `  ${line}`)
-                : `  ${line}`
-            );
+          case "data": {
+            const styled = entry.study 
+              ? this.renderStudyLine(entry.study, line, sourceIndex, wrappedIndex) 
+              : line;
+            
+            if (entry.study?.kind === "review-card") {
+               const padW = Math.max(0, columns - visibleDisplayWidth(styled) - 4);
+               output.push(this.theme.reviewCardBg(`  ${styled}${" ".repeat(padW)}  `));
+            } else {
+               output.push(styled);
+            }
             break;
+          }
         }
       });
     });
@@ -942,22 +1074,116 @@ export class TuiShellSurface implements ShellSurface {
     return output;
   }
 
-  private renderStatusLine(columns: number): string {
-    if (this.waitingText === null) {
-      return this.theme.muted(
-        this.fitLine(
-          "Status  Ready. Natural chat, /review, /rescue, /model, /quit.",
-          columns
-        )
-      );
+  private renderTranscriptWithReviewPanel(cells: ShellTranscriptCell[], columns: number): string[] {
+    let startIndex = 0;
+    for (let i = cells.length - 1; i >= 0; i--) {
+      const cell = cells[i] as ShellTranscriptCell;
+      if (cell.kind === "user-line" || cell.dataKind === "review-card-heading" || cell.study?.kind === "review-intro" || cell.study?.kind === "rescue-intro") {
+        startIndex = i;
+        if (cell.kind === "user-line") {
+          startIndex += 1;
+        }
+        break;
+      }
     }
 
-    return this.theme.status(
-      this.fitLine(
-        `Status  ${WAITING_FRAMES[this.waitingFrame] ?? "•"} ${this.waitingLabel ?? "PawMemo"}  ${this.waitingText}`,
-        columns
+    const priorCells = cells.slice(0, startIndex);
+    const renderedPrior = priorCells.flatMap((cell, i) => {
+      const lines = this.renderCellLines(cell, columns);
+      return i > 0 ? ["", ...lines] : lines;
+    });
+
+    if (startIndex >= cells.length) {
+      return renderedPrior;
+    }
+    
+    const cardCells = cells.slice(startIndex);
+    const cardWidth = Math.min(64, Math.max(40, columns - 10)); 
+    
+    const panelLines: string[] = [];
+    
+    panelLines.push(this.theme.reviewCardBg(" ".repeat(cardWidth)));
+    
+    for (const cell of cardCells) {
+      const lines = this.renderCellLinesForCard(cell, cardWidth - 4); 
+      for (const line of lines) {
+        const visibleW = visibleDisplayWidth(line);
+        const padR = Math.max(0, cardWidth - 4 - visibleW);
+        const padded = `  ${line}${" ".repeat(padR + 2)}`;
+        panelLines.push(this.theme.reviewCardBg(padded));
+      }
+    }
+    
+    panelLines.push(this.theme.reviewCardBg(" ".repeat(cardWidth)));
+    
+    const leftPadding = Math.max(0, Math.floor((columns - cardWidth) / 2));
+    const centeredPanel = panelLines.map(line => `${" ".repeat(leftPadding)}${line}`);
+    
+    return [
+      ...renderedPrior,
+      ...(renderedPrior.length > 0 ? [""] : []),
+      ...centeredPanel,
+      ""
+    ];
+  }
+
+  private renderCellLinesForCard(entry: ShellTranscriptCell, maxWidth: number): string[] {
+    const sourceLines = entry.text.split("\n");
+    const output: string[] = [];
+
+    sourceLines.forEach((sourceLine, sourceIndex) => {
+      const wrappedLines = wrapDisplayText(sourceLine, maxWidth);
+
+      wrappedLines.forEach((line, wrappedIndex) => {
+         const isFirstLine = sourceIndex === 0 && wrappedIndex === 0;
+         if (entry.kind === "data") {
+            if (entry.study) {
+               switch (entry.study.kind) {
+                 case "review-intro":
+                 case "rescue-intro":
+                    output.push(isFirstLine ? this.theme.heading(line) : this.theme.muted(line));
+                    break;
+                 case "review-card":
+                    if (isFirstLine) {
+                      output.push(this.theme.status(line));
+                    } else if (entry.study.emphasis && line.includes(entry.study.emphasis)) {
+                      output.push(this.theme.prompt(line));
+                    } else {
+                      output.push(line);
+                    }
+                    break;
+                 case "review-summary":
+                    output.push(isFirstLine ? this.theme.heading(line) : line);
+                    break;
+                 default:
+                    output.push(line);
+                    break;
+               }
+            } else {
+               output.push(line);
+            }
+         } else {
+            output.push(line);
+         }
+      });
+    });
+
+    return output;
+  }
+
+  private renderStatusLine(columns: number): string[] {
+    if (this.waitingText === null) {
+      return [];
+    }
+
+    return [
+      this.theme.status(
+        this.fitLine(
+          `${WAITING_FRAMES[this.waitingFrame] ?? "•"} ${this.waitingLabel ?? "PawMemo"}  ${this.waitingText}`,
+          columns
+        )
       )
-    );
+    ];
   }
 
   private renderStudyLine(
@@ -972,22 +1198,22 @@ export class TuiShellSurface implements ShellSurface {
       case "review-intro":
       case "rescue-intro":
         return isFirstLine
-          ? `${this.theme.status("•")} ${this.theme.heading(line)}`
-          : `  ${this.theme.muted(line)}`;
+          ? this.theme.heading(line)
+          : this.theme.muted(line);
       case "review-card":
         if (isFirstLine) {
-          return `${this.theme.status("•")} ${this.theme.status(line)}`;
+          return this.theme.status(line);
         }
 
         if (study.emphasis && line.includes(study.emphasis)) {
-          return `  ${this.theme.prompt(line)}`;
+          return this.theme.prompt(line);
         }
 
-        return `  ${line}`;
+        return line;
       case "review-summary":
-        return isFirstLine ? `${this.theme.status("•")} ${this.theme.heading(line)}` : `  ${line}`;
+        return isFirstLine ? this.theme.heading(line) : line;
       default:
-        return isFirstLine ? `${this.theme.status("•")} ${line}` : `  ${line}`;
+        return line;
     }
   }
 
@@ -1032,45 +1258,81 @@ export class TuiShellSurface implements ShellSurface {
   }
 
   private renderComposer(columns: number): string[] {
+    const lines: string[] = [];
+
+    if (this.slashSuggestions.length > 0) {
+       this.slashSuggestions.forEach((cmd, i) => {
+         const info = KNOWN_COMMANDS.find(k => k.name === cmd);
+         const desc = info ? info.description : "";
+         const isSelected = i === this.suggestionIndex;
+         
+         const namePart = cmd.padEnd(16);
+         let safeDesc = desc;
+         const availableWidth = columns - 18;
+         if (availableWidth < 5) {
+             safeDesc = "";
+         } else if (stringDisplayWidth(safeDesc) > availableWidth) {
+             safeDesc = safeDesc.slice(0, availableWidth - 2) + "…";
+         }
+         
+         const nameStyled = this.theme.prompt(namePart);
+         const descStyled = this.theme.muted(safeDesc);
+         
+         if (isSelected) {
+            lines.push(`\u001b[48;5;236m${nameStyled} ${descStyled}\u001b[0m`);
+         } else {
+            lines.push(`${nameStyled} ${descStyled}`);
+         }
+       });
+    } else {
+       // Silent when no suggestions
+    }
+
     const composerLine = this.renderComposerInput(columns);
-    return [
-      this.theme.muted("─".repeat(columns)),
-      this.theme.muted(
-        this.fitLine(
-          "Enter to send  ·  /quit to leave",
-          columns
-        )
-      ),
-      composerLine
-    ];
+    const visibleW = visibleDisplayWidth(composerLine);
+    
+    const padR = Math.max(0, columns - visibleW);
+    const padded = `${composerLine}${" ".repeat(padR)}`;
+    
+    lines.push(padded);
+    return lines;
   }
 
   private renderHeader(columns: number): string[] {
+    const headerText = this.dueCount > 0 
+      ? `${this.displayName} · ${this.shellMode} · ${this.dueCount} due`
+      : `${this.displayName} · ${this.shellMode}`;
+
     return [
-      this.theme.heading(`PawMemo Shell (${this.displayName})`),
-      this.theme.muted(
-        this.fitLine("conversation-first companion", columns)
-      ),
-      ""
+      this.theme.heading(this.fitLine(headerText, columns))
     ];
   }
 
-  private renderTip(columns: number): string[] {
+  private renderTip(): string[] {
     return [];
   }
 
-  private renderFooter(): string[] {
-    return [];
+  private renderFooter(columns: number): string[] {
+    if (!this.activeCompanionLine) {
+        return [];
+    }
+    // Use columns-1 for the bottom-most line of the screen to prevent terminal from
+    // auto-scrolling when writing to the last cell.
+    return [
+        this.theme.companionLine(this.fitLine(this.activeCompanionLine, columns - 1))
+    ];
   }
 
   private renderComposerInput(columns: number): string {
     const prompt = `${this.activePromptLabel}`;
     const cursor = Math.max(0, Math.min(this.composerCursor, this.composerBuffer.length));
+    const cursorChar = this.blinkState ? CURSOR_GLYPH : " ";
     const rawContent =
-      `${this.composerBuffer.slice(0, cursor)}${CURSOR_GLYPH}${this.composerBuffer.slice(cursor)}`;
-    const maxContentWidth = Math.max(1, columns - visibleDisplayWidth(prompt));
+      `${this.composerBuffer.slice(0, cursor)}${cursorChar}${this.composerBuffer.slice(cursor)}`;
+    // Keep it explicitly shorter by 1 to prevent terminal auto-wrap from scrolling the screen
+    const maxContentWidth = Math.max(1, columns - visibleDisplayWidth(prompt) - 1);
     const visibleContent = this.tailDisplayText(rawContent, maxContentWidth);
-    return `${this.theme.prompt(prompt)}${visibleContent}`;
+    return `${this.theme.heading(prompt)}${visibleContent}`;
   }
 
   private tailDisplayText(text: string, maxWidth: number): string {

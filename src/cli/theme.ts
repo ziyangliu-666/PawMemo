@@ -17,7 +17,8 @@ function applyAnsi(
     return text;
   }
 
-  return `\u001b[${codes.join(";")}m${text}${RESET}`;
+  const codeStr = `\u001b[${codes.join(";")}m`;
+  return `${codeStr}${text.split(RESET).join(`${RESET}${codeStr}`)}${RESET}`;
 }
 
 function styleLabelLine(
@@ -70,6 +71,8 @@ export interface CliTheme {
   error(text: string): string;
   companionCard(text: string): string;
   companionLine(text: string): string;
+  reviewCardBg(text: string): string;
+  userLineBg(text: string): string;
   help(text: string): string;
   dataBlock(text: string, kind?: CliDataKind): string;
 }
@@ -107,12 +110,14 @@ export function createCliTheme(options: ThemeOptions): CliTheme {
   const command = (text: string): string => applyAnsi(enabled, text, [36]);
   const muted = (text: string): string => applyAnsi(enabled, text, [90]);
   const prompt = (text: string): string => applyAnsi(enabled, text, [1, 36]);
-  const status = (text: string): string => applyAnsi(enabled, text, [36]);
+  const status = (text: string): string => applyAnsi(enabled, text, [96]);
   const success = (text: string): string => applyAnsi(enabled, text, [32]);
   const warning = (text: string): string => applyAnsi(enabled, text, [33]);
   const error = (text: string): string => applyAnsi(enabled, text, [1, 31]);
   const companionHeader = (text: string): string => applyAnsi(enabled, text, [1, 35]);
-  const companionBody = (text: string): string => text;
+  const companionBody = (text: string): string => applyAnsi(enabled, text, [95]);
+  const reviewCardBg = (text: string): string => applyAnsi(enabled, text, [48, 5, 236]);
+  const userLineBg = (text: string): string => applyAnsi(enabled, text, [48, 5, 238]);
 
   const help = (text: string): string =>
     text
@@ -262,6 +267,8 @@ export function createCliTheme(options: ThemeOptions): CliTheme {
     error,
     companionCard,
     companionLine,
+    reviewCardBg,
+    userLineBg,
     help,
     dataBlock
   };
