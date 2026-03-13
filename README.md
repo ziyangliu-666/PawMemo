@@ -193,7 +193,22 @@ npm run build
 npm run typecheck
 npm run lint
 npm test
+npm pack
 ```
+
+## CI And Release Packaging
+
+GitHub Actions should verify every push to `main` and every pull request with:
+
+```bash
+npm ci
+npm run typecheck
+npm run lint
+npm test
+npm pack
+```
+
+Creating and pushing a version tag such as `v0.1.0` should build the package tarball and attach it to the matching GitHub Release.
 
 ```text
 assets/readme/     README images
