@@ -1,6 +1,6 @@
 import { UsageError } from "../lib/errors";
 
-const BOOLEAN_FLAGS = new Set(["tui"]);
+const BOOLEAN_FLAGS = new Set(["tui", "line"]);
 
 export interface ParsedCommand {
   name: string;

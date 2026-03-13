@@ -93,7 +93,6 @@ export interface ShellSurface {
   ): void;
   createReviewSessionTerminal(): ReviewSessionTerminal;
   setMode?(mode: string, dueCount?: number): void;
-  close(): Promise<void> | void;
 }
 
 function codePointWidth(codePoint: number): number {
@@ -717,10 +716,10 @@ export class TuiShellSurface implements ShellSurface {
   ): void {
     this.clearWaitingIndicator();
     this.appendEntry({
-      kind: "data",
+      kind: study ? "study-card" : "data",
       text,
       dataKind: kind,
-      study: study ?? this.inferStudyCell(text, kind)
+      study
     });
   }
 
@@ -732,8 +731,7 @@ export class TuiShellSurface implements ShellSurface {
         this.appendEntry({
           kind: "data",
           text,
-          dataKind: "plain",
-          study: this.inferStudyCell(text, "plain")
+          dataKind: "plain"
         });
       },
       writeDataBlock: (
@@ -958,29 +956,26 @@ export class TuiShellSurface implements ShellSurface {
 
   private renderTranscript(columns: number, height: number): string[] {
     const snapshot = this.transcript.snapshot();
+    const rendered = snapshot.committedCells.flatMap((cell, i) => {
+      const lines = this.renderCellLines(cell, columns);
+      const prevCell = snapshot.committedCells[i - 1];
+      const keepTight =
+        i > 0 &&
+        cell.kind === "study-card" &&
+        prevCell?.kind === "study-card";
 
-    let rendered: string[] = [];
+      return i > 0 && !keepTight ? ["", ...lines] : lines;
+    });
 
-    if (this.shellMode === "Review" || this.shellMode === "Reveal" || this.shellMode === "Summary") {
-      rendered = this.renderTranscriptWithReviewPanel(snapshot.committedCells, columns);
-    } else {
-      rendered = snapshot.committedCells.flatMap((cell, i) => {
-        const lines = this.renderCellLines(cell, columns);
-        const prevCell = snapshot.committedCells[i - 1];
-        const isConsecutiveStudy = i > 0 && cell.study && prevCell?.study;
-        return (i > 0 && !isConsecutiveStudy) ? ["", ...lines] : lines;
-      });
-
-      if (snapshot.activeCell && snapshot.activeCell.text.trim().length > 0) {
-        if (rendered.length > 0) {
-           rendered.push("");
-        }
-        rendered.push(...this.renderCellLines({
-          id: 0,
-          kind: snapshot.activeCell.kind,
-          text: snapshot.activeCell.text
-        }, columns));
+    if (snapshot.activeCell && snapshot.activeCell.text.trim().length > 0) {
+      if (rendered.length > 0) {
+        rendered.push("");
       }
+      rendered.push(...this.renderCellLines({
+        id: 0,
+        kind: snapshot.activeCell.kind,
+        text: snapshot.activeCell.text
+      }, columns));
     }
 
     if (rendered.length === 0) {
@@ -1014,6 +1009,10 @@ export class TuiShellSurface implements ShellSurface {
   }
 
   private renderCellLines(entry: ShellTranscriptCell, columns: number): string[] {
+    if (entry.kind === "study-card") {
+      return this.renderStudyCard(entry, columns);
+    }
+
     const maxWidth = Math.max(12, columns);
     const sourceLines = entry.text.split("\n");
     const output: string[] = [];
@@ -1055,116 +1054,12 @@ export class TuiShellSurface implements ShellSurface {
             output.push(this.theme.muted(line));
             break;
           case "data": {
-            const styled = entry.study 
-              ? this.renderStudyLine(entry.study, line, sourceIndex, wrappedIndex) 
-              : line;
-            
-            if (entry.study?.kind === "review-card") {
-               const padW = Math.max(0, columns - visibleDisplayWidth(styled) - 4);
-               output.push(this.theme.reviewCardBg(`  ${styled}${" ".repeat(padW)}  `));
-            } else {
-               output.push(styled);
-            }
+            output.push(line);
             break;
           }
+          case "study-card":
+            break;
         }
-      });
-    });
-
-    return output;
-  }
-
-  private renderTranscriptWithReviewPanel(cells: ShellTranscriptCell[], columns: number): string[] {
-    let startIndex = 0;
-    for (let i = cells.length - 1; i >= 0; i--) {
-      const cell = cells[i] as ShellTranscriptCell;
-      if (cell.kind === "user-line" || cell.dataKind === "review-card-heading" || cell.study?.kind === "review-intro" || cell.study?.kind === "rescue-intro") {
-        startIndex = i;
-        if (cell.kind === "user-line") {
-          startIndex += 1;
-        }
-        break;
-      }
-    }
-
-    const priorCells = cells.slice(0, startIndex);
-    const renderedPrior = priorCells.flatMap((cell, i) => {
-      const lines = this.renderCellLines(cell, columns);
-      return i > 0 ? ["", ...lines] : lines;
-    });
-
-    if (startIndex >= cells.length) {
-      return renderedPrior;
-    }
-    
-    const cardCells = cells.slice(startIndex);
-    const cardWidth = Math.min(64, Math.max(40, columns - 10)); 
-    
-    const panelLines: string[] = [];
-    
-    panelLines.push(this.theme.reviewCardBg(" ".repeat(cardWidth)));
-    
-    for (const cell of cardCells) {
-      const lines = this.renderCellLinesForCard(cell, cardWidth - 4); 
-      for (const line of lines) {
-        const visibleW = visibleDisplayWidth(line);
-        const padR = Math.max(0, cardWidth - 4 - visibleW);
-        const padded = `  ${line}${" ".repeat(padR + 2)}`;
-        panelLines.push(this.theme.reviewCardBg(padded));
-      }
-    }
-    
-    panelLines.push(this.theme.reviewCardBg(" ".repeat(cardWidth)));
-    
-    const leftPadding = Math.max(0, Math.floor((columns - cardWidth) / 2));
-    const centeredPanel = panelLines.map(line => `${" ".repeat(leftPadding)}${line}`);
-    
-    return [
-      ...renderedPrior,
-      ...(renderedPrior.length > 0 ? [""] : []),
-      ...centeredPanel,
-      ""
-    ];
-  }
-
-  private renderCellLinesForCard(entry: ShellTranscriptCell, maxWidth: number): string[] {
-    const sourceLines = entry.text.split("\n");
-    const output: string[] = [];
-
-    sourceLines.forEach((sourceLine, sourceIndex) => {
-      const wrappedLines = wrapDisplayText(sourceLine, maxWidth);
-
-      wrappedLines.forEach((line, wrappedIndex) => {
-         const isFirstLine = sourceIndex === 0 && wrappedIndex === 0;
-         if (entry.kind === "data") {
-            if (entry.study) {
-               switch (entry.study.kind) {
-                 case "review-intro":
-                 case "rescue-intro":
-                    output.push(isFirstLine ? this.theme.heading(line) : this.theme.muted(line));
-                    break;
-                 case "review-card":
-                    if (isFirstLine) {
-                      output.push(this.theme.status(line));
-                    } else if (entry.study.emphasis && line.includes(entry.study.emphasis)) {
-                      output.push(this.theme.prompt(line));
-                    } else {
-                      output.push(line);
-                    }
-                    break;
-                 case "review-summary":
-                    output.push(isFirstLine ? this.theme.heading(line) : line);
-                    break;
-                 default:
-                    output.push(line);
-                    break;
-               }
-            } else {
-               output.push(line);
-            }
-         } else {
-            output.push(line);
-         }
       });
     });
 
@@ -1186,20 +1081,49 @@ export class TuiShellSurface implements ShellSurface {
     ];
   }
 
-  private renderStudyLine(
-    study: ShellStudyCellPayload,
+  private renderStudyCard(entry: ShellTranscriptCell, columns: number): string[] {
+    const study = entry.study;
+    const cardWidth = Math.min(76, Math.max(40, columns - 10));
+    const innerWidth = Math.max(12, cardWidth - 4);
+    const sourceLines = entry.text.split("\n");
+    const bodyLines: string[] = [];
+
+    sourceLines.forEach((sourceLine, sourceIndex) => {
+      const wrappedLines = wrapDisplayText(sourceLine, innerWidth);
+
+      wrappedLines.forEach((line, wrappedIndex) => {
+        bodyLines.push(
+          this.styleStudyCardLine(study, line, sourceIndex, wrappedIndex)
+        );
+      });
+    });
+
+    const paddedLines = [
+      this.theme.reviewCardBg(" ".repeat(cardWidth)),
+      ...bodyLines.map((line) => {
+        const visibleW = visibleDisplayWidth(line);
+        const padR = Math.max(0, innerWidth - visibleW);
+        return this.theme.reviewCardBg(`  ${line}${" ".repeat(padR + 2)}`);
+      }),
+      this.theme.reviewCardBg(" ".repeat(cardWidth))
+    ];
+    const leftPadding = Math.max(0, Math.floor((columns - cardWidth) / 2));
+
+    return paddedLines.map((line) => `${" ".repeat(leftPadding)}${line}`);
+  }
+
+  private styleStudyCardLine(
+    study: ShellStudyCellPayload | undefined,
     line: string,
     sourceIndex: number,
     wrappedIndex: number
   ): string {
     const isFirstLine = sourceIndex === 0 && wrappedIndex === 0;
 
-    switch (study.kind) {
+    switch (study?.kind) {
       case "review-intro":
       case "rescue-intro":
-        return isFirstLine
-          ? this.theme.heading(line)
-          : this.theme.muted(line);
+        return isFirstLine ? this.theme.heading(line) : this.theme.muted(line);
       case "review-card":
         if (isFirstLine) {
           return this.theme.status(line);
@@ -1215,46 +1139,6 @@ export class TuiShellSurface implements ShellSurface {
       default:
         return line;
     }
-  }
-
-  private inferStudyCell(
-    text: string,
-    kind: CliDataKind
-  ): ShellStudyCellPayload | undefined {
-    if (kind === "review-session-heading") {
-      return {
-        kind: "review-intro",
-        title: "review"
-      };
-    }
-
-    if (kind === "review-card-heading" || /^First up: |^Next up: /.test(text)) {
-      return {
-        kind: "review-card",
-        title: "card",
-        emphasis: "What we were looking for:"
-      };
-    }
-
-    if (
-      kind === "review-session-status-success" ||
-      kind === "review-session-status-warning" ||
-      kind === "review-summary"
-    ) {
-      return {
-        kind: "review-summary",
-        title: "summary"
-      };
-    }
-
-    if (kind === "rescue" || /^We'll rescue /.test(text)) {
-      return {
-        kind: "rescue-intro",
-        title: "rescue"
-      };
-    }
-
-    return undefined;
   }
 
   private renderComposer(columns: number): string[] {

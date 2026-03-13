@@ -853,7 +853,7 @@ test("ShellRunner can show model status and list models from slash commands", as
 
   try {
     const fakeProvider = new FakeGeminiProvider();
-    const terminal = new FakeShellTerminal(["/model", "/models", "/quit"]);
+    const terminal = new FakeShellTerminal(["/model", "/model list", "/quit"]);
 
     const runner = new ShellRunner({
       db,
@@ -869,7 +869,7 @@ test("ShellRunner can show model status and list models from slash commands", as
     );
     assert.ok(
       terminal.writes.some((line) => line.includes("Models (gemini)")),
-      "expected /models to print provider models"
+      "expected /model list to print provider models"
     );
     assert.ok(
       terminal.writes.some((line) => line.includes("gemini-2.5-pro")),

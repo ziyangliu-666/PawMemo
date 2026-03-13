@@ -143,5 +143,47 @@ test("TuiShellSurface accepts explicit study intent from the review terminal", (
   surface.close();
 
   const output = terminal.rawWrites.join("");
-  assert.ok(output.includes("\u001b[36mOpaque prompt\u001b[0m"));
+  assert.match(output, /Opaque prompt/);
+  assert.ok(output.includes("\u001b[48;5;236m"));
+});
+
+test("TuiShellSurface merges one review card history into one centered study card", () => {
+  const terminal = new FakeShellTerminal([], true);
+  const surface = new TuiShellSurface(terminal);
+  const reviewTerminal = surface.createReviewSessionTerminal();
+
+  surface.beginShell("Momo");
+  reviewTerminal.writeDataBlock?.("First up: facilitator", "review-card-heading", {
+    kind: "review-card",
+    title: "card",
+    emphasis: "What we were looking for:",
+    groupId: "card-1"
+  });
+  reviewTerminal.writeDataBlock?.(
+    "handle invalid ____ responses, facilitator",
+    "plain",
+    {
+      kind: "review-card",
+      title: "card",
+      emphasis: "What we were looking for:",
+      groupId: "card-1"
+    }
+  );
+  reviewTerminal.writeDataBlock?.(
+    "What we were looking for: facilitator",
+    "review-card-field",
+    {
+      kind: "review-card",
+      title: "card",
+      emphasis: "What we were looking for:",
+      groupId: "card-1"
+    }
+  );
+  surface.close();
+
+  const output = terminal.rawWrites.join("");
+  assert.match(output, /First up: facilitator/);
+  assert.match(output, /handle invalid ____ responses, facilitator/);
+  assert.match(output, /What we were looking for: facilitator/);
+  assert.ok(output.includes("\u001b[48;5;236m"));
 });

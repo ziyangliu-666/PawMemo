@@ -1,7 +1,6 @@
 import type {
   AskWordInput,
   CaptureWordInput,
-  ConversationTurnRecord,
   TeachWordInput
 } from "../core/domain/models";
 import type {
@@ -11,6 +10,7 @@ import type {
 } from "../companion/types";
 import { ConfigurationError } from "../lib/errors";
 import { interpretShellInput } from "./shell-intent";
+import type { ShellPlannerTurn } from "./shell-session-state";
 import type { LlmShellPlanner, ShellPlannerDecision } from "./shell-planner";
 
 export type ShellAction =
@@ -50,7 +50,7 @@ export interface ShellAgentDecision {
 }
 
 export interface ShellAgentContext {
-  recentTurns: ConversationTurnRecord[];
+  recentTurns: ShellPlannerTurn[];
   activePack: CompanionPackDefinition;
   statusSignals: CompanionStatusSignals;
 }

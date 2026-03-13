@@ -1,7 +1,6 @@
 import type {
   AskWordInput,
   CaptureWordInput,
-  ConversationTurnRecord,
   LlmProviderName,
   TeachWordInput
 } from "../core/domain/models";
@@ -18,10 +17,11 @@ import { resolveApiKey } from "../llm/resolve-api-key";
 import { parseStructuredJson } from "../llm/structured-output";
 import type { LlmProvider } from "../llm/types";
 import { ProviderRequestError } from "../lib/errors";
+import type { ShellPlannerTurn } from "./shell-session-state";
 
 export interface ShellPlannerInput {
   rawInput: string;
-  recentTurns: ConversationTurnRecord[];
+  recentTurns: ShellPlannerTurn[];
   activePack: CompanionPackDefinition;
   statusSignals: CompanionStatusSignals;
   pendingProposalText?: string | null;

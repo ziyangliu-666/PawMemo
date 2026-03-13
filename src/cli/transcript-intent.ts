@@ -8,4 +8,5 @@ export interface StudyCellIntent {
   kind: StudyCellKind;
   title?: string;
   emphasis?: string | null;
+  groupId?: string;
 }

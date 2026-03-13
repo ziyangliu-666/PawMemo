@@ -17,7 +17,6 @@ import type {
   LlmProviderName,
   TeachWordInput
 } from "../core/domain/models";
-import { StudyServices } from "../core/orchestration/study-services";
 import { isLlmProviderName } from "../llm/provider-factory";
 import type { LlmProvider } from "../llm/types";
 import {
@@ -48,31 +47,24 @@ import {
   presentShellStatsResult,
   presentShellTeachResult
 } from "./shell-presenter";
-import {
-  buildReturnAfterGapSummary,
-  buildReviewSessionCompanionEvent
-} from "./review-session-feedback";
+import { buildReviewSessionCompanionEvent } from "./review-session-feedback";
 import {
   ShellConversationAgent,
   type ShellAction,
   type ShellAgentResponse
 } from "./shell-agent";
-import { ShellConversationSession } from "./shell-conversation-session";
 import { LlmShellPlanner } from "./shell-planner";
 import type { CliDataKind } from "./theme";
 import { parseCommand, tokenizeCommandLine } from "./command-parser";
-import {
-  ReviewSessionRunner,
-  type ReviewSessionServices,
-} from "./review-session-runner";
 import { AppSettingsRepository } from "../storage/repositories/app-settings-repository";
-import { LlmConfigService } from "../llm/llm-config-service";
 import {
   LineShellSurface,
   ReadlineShellTerminal,
   type ShellSurface,
   type ShellTerminal
 } from "./shell-surface";
+import { ShellSessionState } from "./shell-session-state";
+import { ShellActionExecutor } from "./shell-action-executor";
 
 export interface ShellRunnerOptions {
   db: SqliteDatabase;
@@ -129,9 +121,8 @@ function asProviderName(value: string | undefined): LlmProviderName | undefined 
 export class ShellRunner {
   private readonly surface: ShellSurface;
   private readonly conversationAgent: ShellConversationAgent;
-  private readonly conversationSession: ShellConversationSession;
-  private readonly study: StudyServices;
-  private readonly llmConfig: LlmConfigService;
+  private readonly sessionState = new ShellSessionState();
+  private readonly executor: ShellActionExecutor;
   private readonly activePack: CompanionPackDefinition;
   private readonly shellState: ShellState = {
     mood: "idle",
@@ -141,27 +132,17 @@ export class ShellRunner {
   constructor(options: ShellRunnerOptions) {
     const terminal = options.terminal ?? new ReadlineShellTerminal();
     this.surface = options.surface ?? new LineShellSurface(terminal);
-    this.study = new StudyServices(options.db, options.providerFactory);
-    this.llmConfig = new LlmConfigService(options.db, options.providerFactory);
+    this.executor = new ShellActionExecutor(options.db, options.providerFactory);
     const settings = new AppSettingsRepository(options.db);
     this.activePack = loadCompanionPack(
       options.packId ?? settings.getCompanionPackId()
     );
-    this.conversationSession = new ShellConversationSession(options.db, {
-      activePackId: this.activePack.id
-    });
     this.conversationAgent = new ShellConversationAgent(
       new LlmShellPlanner(options.db, options.providerFactory)
     );
   }
 
   async run(): Promise<void> {
-    const historicalTurns = this.conversationSession.listRecentGlobal(20);
-    this.surface.seedTranscript?.(historicalTurns.map((turn) => ({
-      kind: turn.speaker === "user" ? "user-line" : "assistant",
-      text: turn.contentText
-    })));
-
     this.surface.beginShell(this.activePack.displayName);
 
     try {
@@ -177,20 +158,20 @@ export class ShellRunner {
         }
 
         try {
-          this.conversationSession.recordUserUtterance(rawInput);
+          this.sessionState.recordUserUtterance(rawInput);
           const decision = await this.withWaitingCapsule(
             { type: "planner_wait" },
             () =>
               this.conversationAgent.respond(rawInput, {
-                pendingProposal: this.conversationSession.getPendingProposal(),
+                pendingProposal: this.sessionState.getPendingProposal(),
                 context: {
-                  recentTurns: this.conversationSession.listRecentTurns(6),
+                  recentTurns: this.sessionState.listRecentTurns(6),
                   activePack: this.activePack,
                   statusSignals: this.getStatusSignals()
                 }
               })
           );
-          this.conversationSession.applyDecision(decision);
+          this.sessionState.applyDecision(decision);
           const shouldExit = await this.handleAgentResponse(decision.response);
 
           if (shouldExit) {
@@ -210,7 +191,6 @@ export class ShellRunner {
         }
       }
     } finally {
-      this.conversationSession.end();
       await this.surface.close();
     }
   }
@@ -298,7 +278,7 @@ export class ShellRunner {
   }
 
   private getStatusSignals(): CompanionStatusSignals {
-    const signals = this.study.getCompanionSignals();
+    const signals = this.executor.getCompanionSignals();
 
     return {
       dueCount: signals.dueCount,
@@ -386,11 +366,6 @@ export class ShellRunner {
       case "model":
         await this.runModel(command);
         return;
-      case "models":
-        await this.runModel(
-          parseCommand(["model", "list", ...command.args])
-        );
-        return;
       default:
         throw new UsageError(`Unknown shell command: ${command.name}`);
     }
@@ -470,9 +445,9 @@ export class ShellRunner {
     const subcommand = command.args[0];
 
     if (subcommand === undefined || subcommand === "show") {
-      const formatted = formatLlmStatus(this.llmConfig.getStatusSummary());
+      const formatted = formatLlmStatus(this.executor.getLlmStatus());
       this.writeDataBlock(formatted, "llm-status");
-      this.conversationSession.recordActionResult(
+      this.sessionState.recordActionResult(
         formatted,
         JSON.stringify({ type: "model-status" })
       );
@@ -487,21 +462,21 @@ export class ShellRunner {
         throw new UsageError("`/model use` requires a provider name.");
       }
 
-      this.llmConfig.updateCurrentSettings({
+      this.executor.updateCurrentLlmSettings({
         provider,
         model,
         apiKey: command.flags["api-key"] ?? undefined,
         apiUrl: command.flags["api-url"] ?? undefined
       });
 
-      const formatted = formatLlmStatus(this.llmConfig.getStatusSummary());
+      const formatted = formatLlmStatus(this.executor.getLlmStatus());
       this.writeDataBlock(formatted, "llm-status");
-      this.conversationSession.recordActionResult(
+      this.sessionState.recordActionResult(
         formatted,
         JSON.stringify({
           type: "model-set",
           provider,
-          model: this.llmConfig.getCurrentSettings().model
+          model: this.executor.getLlmStatus().model
         })
       );
       return;
@@ -512,7 +487,7 @@ export class ShellRunner {
       const result = await this.withWaitingCapsule(
         { type: "study_wait" },
         () =>
-          this.llmConfig.listModels({
+          this.executor.listModels({
             provider,
             apiKey: command.flags["api-key"],
             apiUrl: command.flags["api-url"]
@@ -520,7 +495,7 @@ export class ShellRunner {
       );
       const formatted = formatLlmModelList(result);
       this.writeDataBlock(formatted, "llm-model-list");
-      this.conversationSession.recordActionResult(
+      this.sessionState.recordActionResult(
         formatted,
         JSON.stringify({
           type: "model-list",
@@ -543,10 +518,10 @@ export class ShellRunner {
         throw new UsageError("`/model url` requires an API URL value.");
       }
 
-      this.llmConfig.setProviderApiUrl(provider, apiUrl);
-      const formatted = formatLlmStatus(this.llmConfig.getStatusSummary());
+      this.executor.setProviderApiUrl(provider, apiUrl);
+      const formatted = formatLlmStatus(this.executor.getLlmStatus());
       this.writeDataBlock(formatted, "llm-status");
-      this.conversationSession.recordActionResult(
+      this.sessionState.recordActionResult(
         formatted,
         JSON.stringify({
           type: "model-url",
@@ -568,10 +543,10 @@ export class ShellRunner {
         throw new UsageError("`/model key` requires an API key value.");
       }
 
-      this.llmConfig.setProviderApiKey(provider, apiKey);
-      const formatted = formatLlmStatus(this.llmConfig.getStatusSummary());
+      this.executor.setProviderApiKey(provider, apiKey);
+      const formatted = formatLlmStatus(this.executor.getLlmStatus());
       this.writeDataBlock(formatted, "llm-status");
-      this.conversationSession.recordActionResult(
+      this.sessionState.recordActionResult(
         formatted,
         JSON.stringify({
           type: "model-key",
@@ -597,31 +572,31 @@ export class ShellRunner {
       );
     }
 
-    this.llmConfig.updateCurrentSettings({
+    this.executor.updateCurrentLlmSettings({
       provider,
       model: modelToken,
       apiKey: command.flags["api-key"] ?? undefined,
       apiUrl: command.flags["api-url"] ?? undefined
     });
 
-    const formatted = formatLlmStatus(this.llmConfig.getStatusSummary());
+    const formatted = formatLlmStatus(this.executor.getLlmStatus());
     this.writeDataBlock(formatted, "llm-status");
-    this.conversationSession.recordActionResult(
+    this.sessionState.recordActionResult(
       formatted,
       JSON.stringify({
         type: "model-set",
         provider,
-        model: this.llmConfig.getCurrentSettings().model
+        model: this.executor.getLlmStatus().model
       })
     );
   }
 
   private runStats(): void {
-    const summary = this.study.getCompanionSignals();
-    const home = this.study.getHomeProjection();
+    const summary = this.executor.getCompanionSignals();
+    const home = this.executor.getHomeProjection();
     const natural = presentShellStatsResult(summary, home);
     this.writeAssistantReplyNow(natural);
-    this.conversationSession.recordActionResult(
+    this.sessionState.recordActionResult(
       natural,
       JSON.stringify({
         type: "stats",
@@ -646,12 +621,12 @@ export class ShellRunner {
       case undefined:
       case "session": {
         const limit = parseOptionalLimit(command.flags.limit);
-        const reviewSummary = this.study.getCompanionSignals();
+        const reviewSummary = this.executor.getCompanionSignals();
 
         if (reviewSummary.dueCount === 0) {
           const natural = presentShellReviewIntro(reviewSummary);
           this.writeAssistantReplyNow(natural);
-          this.conversationSession.recordActionResult(
+          this.sessionState.recordActionResult(
             natural,
             JSON.stringify({
               type: "review-session-empty-intro"
@@ -663,49 +638,41 @@ export class ShellRunner {
 
         const intro = presentShellReviewIntro(reviewSummary);
         this.writeAssistantReplyNow(intro);
-        const signalsBefore = this.study.getCompanionSignals();
-        const reviewServices: ReviewSessionServices = {
-          getNext: (now?: string) => this.study.getNextReviewCard(now),
-          reveal: (cardId: number) => this.study.revealReviewCard(cardId),
-          grade: (cardId, grade, reviewedAt) =>
-            this.study.gradeReviewCard({ cardId, grade, reviewedAt })
-        };
-
-        const result = await ReviewSessionRunner.withServices(
-          reviewServices,
+        const reviewSession = await this.executor.runReviewSession(
           this.surface.createReviewSessionTerminal(),
+          { limit },
           createShellReviewSessionCopy()
-        ).run({ limit });
-        const signalsAfter = this.study.getCompanionSignals();
-        const returnAfterGap = buildReturnAfterGapSummary(
-          signalsBefore,
-          signalsAfter,
-          result
         );
-        const summary = presentShellReviewSessionSummary(result, returnAfterGap);
+        const summary = presentShellReviewSessionSummary(
+          reviewSession.result,
+          reviewSession.returnAfterGap
+        );
         this.writeAssistantReplyNow(summary);
 
-        this.conversationSession.recordActionResult(
+        this.sessionState.recordActionResult(
           [intro, summary].join("\n"),
           JSON.stringify({
             type: "review-session",
-            reviewedCount: result.reviewedCount,
-            quitEarly: result.quitEarly,
-            limitReached: result.limitReached,
-            gradeCounts: result.gradeCounts,
-            returnAfterGap
+            reviewedCount: reviewSession.result.reviewedCount,
+            quitEarly: reviewSession.result.quitEarly,
+            limitReached: reviewSession.result.limitReached,
+            gradeCounts: reviewSession.result.gradeCounts,
+            returnAfterGap: reviewSession.returnAfterGap
           })
         );
         this.applyReaction(
-          buildReviewSessionCompanionEvent(result, returnAfterGap)
+          buildReviewSessionCompanionEvent(
+            reviewSession.result,
+            reviewSession.returnAfterGap
+          )
         );
         return;
       }
       case "next": {
-        const result = this.study.getNextReviewCard();
+        const result = this.executor.getNextReviewCard();
         const formatted = formatNextReviewCard(result);
         this.writeDataBlock(formatted, "review-next");
-        this.conversationSession.recordActionResult(
+        this.sessionState.recordActionResult(
           formatted,
           JSON.stringify({
             type: "review-next",
@@ -724,10 +691,10 @@ export class ShellRunner {
           command.args[1],
           "`review reveal` requires a positive card id."
         );
-        const result = this.study.revealReviewCard(cardId);
+        const result = this.executor.revealReviewCard(cardId);
         const formatted = formatReviewReveal(result);
         this.writeDataBlock(formatted, "review-reveal");
-        this.conversationSession.recordActionResult(
+        this.sessionState.recordActionResult(
           formatted,
           JSON.stringify({
             type: "review-reveal",
@@ -747,14 +714,14 @@ export class ShellRunner {
   }
 
   private async runRescue(): Promise<void> {
-    const status = this.study.getCompanionSignals();
-    const home = this.study.getHomeProjection();
-    const candidate = this.study.getRescueCandidate();
+    const status = this.executor.getCompanionSignals();
+    const home = this.executor.getHomeProjection();
+    const candidate = this.executor.getRescueCandidate();
 
     if (!candidate) {
       const natural = presentShellNoRescueCandidate(status);
       this.writeAssistantReplyNow(natural);
-      this.conversationSession.recordActionResult(
+      this.sessionState.recordActionResult(
         natural,
         JSON.stringify({
           type: "rescue-none",
@@ -782,47 +749,42 @@ export class ShellRunner {
       this.surface.renderCompanionLine(introEvent.lineOverride);
     }
 
-    let completed = false;
-    const rescueServices: ReviewSessionServices = {
-      getNext: () => (completed ? null : candidate.card),
-      reveal: (cardId: number) => this.study.revealReviewCard(cardId),
-      grade: (cardId, grade, reviewedAt) => {
-        const result = this.study.gradeReviewCard({ cardId, grade, reviewedAt });
-        completed = true;
-        return result;
-      }
-    };
-    const result = await ReviewSessionRunner.withServices(
-      rescueServices,
+    const rescueSession = await this.executor.runRescueSession(
       this.surface.createReviewSessionTerminal(),
+      {},
       createShellReviewSessionCopy()
-    ).run();
-    const summary = presentShellReviewSessionSummary(result, null, {
+    );
+
+    if (!rescueSession) {
+      return;
+    }
+
+    const summary = presentShellReviewSessionSummary(rescueSession.result, null, {
       mode: "rescue",
       focusWord: candidate.card.lemma
     });
     this.writeAssistantReplyNow(summary);
-    this.conversationSession.recordActionResult(
+    this.sessionState.recordActionResult(
       [intro, summary].join("\n"),
       JSON.stringify({
         type: "rescue",
         word: candidate.card.lemma,
-        reviewedCount: result.reviewedCount,
-        quitEarly: result.quitEarly,
-        limitReached: result.limitReached,
-        gradeCounts: result.gradeCounts
+        reviewedCount: rescueSession.result.reviewedCount,
+        quitEarly: rescueSession.result.quitEarly,
+        limitReached: rescueSession.result.limitReached,
+        gradeCounts: rescueSession.result.gradeCounts
       })
     );
 
     this.applyReaction(
-      result.reviewedCount > 0
+      rescueSession.result.reviewedCount > 0
         ? {
             type: "rescue_complete",
             word: candidate.card.lemma
           }
         : {
             type: "review_session_quit",
-            reviewedCount: result.reviewedCount
+            reviewedCount: rescueSession.result.reviewedCount
           }
     );
   }
@@ -853,24 +815,22 @@ export class ShellRunner {
       "  /model use <provider> [model] [--api-key KEY] [--api-url URL]",
       "  /model key <provider> <api-key>",
       "  /model url <provider> <api-url>",
-      "  /models [provider]",
-      "  /model <provider> [model] [--api-key KEY] [--api-url URL]  (legacy alias)",
       "  /quit | /exit"
     ].join("\n");
 
     this.surface.writeHelp(helpText);
-    this.conversationSession.recordActionResult(
+    this.sessionState.recordActionResult(
       helpText,
       JSON.stringify({ type: "help" })
     );
   }
 
   private runCaptureInput(input: CaptureWordInput): void {
-    const result = this.study.capture(input);
+    const result = this.executor.capture(input);
     const natural = presentShellCaptureResult(result);
 
     this.writeAssistantReplyNow(natural);
-    this.conversationSession.recordActionResult(
+    this.sessionState.recordActionResult(
       natural,
       JSON.stringify({
         type: "capture",
@@ -887,12 +847,12 @@ export class ShellRunner {
   private async runAskInput(input: AskWordInput): Promise<void> {
     const result = await this.withWaitingCapsule(
       { type: "study_wait" },
-      () => this.study.ask(input)
+      () => this.executor.ask(input)
     );
     const natural = presentShellAskResult(result);
 
     await this.writeAssistantReply(natural);
-    this.conversationSession.recordActionResult(
+    this.sessionState.recordActionResult(
       natural,
       JSON.stringify({
         type: "ask",
@@ -909,12 +869,12 @@ export class ShellRunner {
   private async runTeachInput(input: TeachWordInput): Promise<void> {
     const result = await this.withWaitingCapsule(
       { type: "study_wait" },
-      () => this.study.teach(input)
+      () => this.executor.teach(input)
     );
     const natural = presentShellTeachResult(result);
 
     await this.writeAssistantReply(natural);
-    this.conversationSession.recordActionResult(
+    this.sessionState.recordActionResult(
       natural,
       JSON.stringify({
         type: "teach",
@@ -932,7 +892,7 @@ export class ShellRunner {
     const natural = presentShellError(error);
 
     if (error instanceof ConfigurationError) {
-      this.conversationSession.recordError(natural);
+      this.sessionState.recordError(natural);
       this.writeAssistantReplyNow(natural);
 
       return;
@@ -946,18 +906,18 @@ export class ShellRunner {
       error instanceof ExplanationContractError ||
       error instanceof ProviderRequestError
     ) {
-      this.conversationSession.recordError(natural);
+      this.sessionState.recordError(natural);
       this.writeAssistantReplyNow(natural);
       return;
     }
 
     if (error instanceof Error) {
-      this.conversationSession.recordError(natural);
+      this.sessionState.recordError(natural);
       this.writeAssistantReplyNow(natural);
       return;
     }
 
-    this.conversationSession.recordError(natural);
+    this.sessionState.recordError(natural);
     this.writeAssistantReplyNow(natural);
   }
 

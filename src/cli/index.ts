@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { StudyServices } from "../core/orchestration/study-services";
 import type { LlmProviderName, ReviewGrade } from "../core/domain/models";
 import { loadCompanionPack, listCompanionPacks } from "../companion/packs";
 import { renderCompanionCard } from "../companion/presenter";
@@ -34,15 +33,14 @@ import {
   formatTeachResult
 } from "./format";
 import {
-  buildReturnAfterGapSummary,
   buildReviewSessionCompanionEvent
 } from "./review-session-feedback";
 import { createCliTheme, shouldUseColor } from "./theme";
 import type { CliDataKind } from "./theme";
 import { parseCommand, type ParsedCommand } from "./command-parser";
-import { ReviewSessionRunner } from "./review-session-runner";
 import { ShellRunner } from "./shell-runner";
 import { ReadlineShellTerminal, TuiShellSurface } from "./shell-surface";
+import { ShellActionExecutor } from "./shell-action-executor";
 import { openDatabase } from "../storage/sqlite/database";
 import { AppSettingsRepository } from "../storage/repositories/app-settings-repository";
 import { nowIso } from "../lib/time";
@@ -102,7 +100,7 @@ function printHelp(): void {
       "  pawmemo rescue [--at ISO] [--db path]",
       "  pawmemo pet [--db path]",
       "  pawmemo pet [--pack PACK_ID] [--db path]",
-      "  pawmemo shell [--tui] [--db path]",
+      "  pawmemo shell [--line] [--db path]",
       "  pawmemo stats [--db path]",
       "  pawmemo config show [--db path]",
       "  pawmemo config llm [show] [--db path]",
@@ -125,7 +123,8 @@ function printHelp(): void {
       "  pawmemo rescue",
       "  pawmemo pet",
       "  pawmemo shell",
-      "  pawmemo shell --tui",
+      "  pawmemo shell",
+      "  pawmemo shell --line",
       "  pawmemo stats",
       "  pawmemo config llm",
       "  pawmemo config llm use --provider openai --model gpt-5-mini --api-key KEY",
@@ -160,8 +159,8 @@ function runCapture(command: ParsedCommand): void {
   const db = openDatabase(command.flags.db);
 
   try {
-    const study = new StudyServices(db);
-    const result = study.capture({
+    const executor = new ShellActionExecutor(db);
+    const result = executor.capture({
       word,
       context,
       gloss,
@@ -178,9 +177,9 @@ function runStats(command: ParsedCommand): void {
   const db = openDatabase(command.flags.db);
 
   try {
-    const study = new StudyServices(db);
-    const summary = study.getCompanionSignals();
-    const recovery = study.getRecoveryProjection();
+    const executor = new ShellActionExecutor(db);
+    const summary = executor.getCompanionSignals();
+    const recovery = executor.getRecoveryProjection();
     const settings = new AppSettingsRepository(db);
     const pack = loadCompanionPack(settings.getCompanionPackId());
     const reaction = buildCompanionReaction(
@@ -228,11 +227,11 @@ async function runReview(command: ParsedCommand): Promise<void> {
   const db = openDatabase(command.flags.db);
 
   try {
-    const study = new StudyServices(db);
+    const executor = new ShellActionExecutor(db);
 
     switch (subcommand) {
       case undefined: {
-        const result = study.getReviewQueue({
+        const result = executor.getReviewQueue({
           limit
         });
 
@@ -240,7 +239,7 @@ async function runReview(command: ParsedCommand): Promise<void> {
         return;
       }
       case "next": {
-        const result = study.getNextReviewCard();
+        const result = executor.getNextReviewCard();
         writeStdout(formatNextReviewCard(result), { kind: "review-next" });
         return;
       }
@@ -251,32 +250,36 @@ async function runReview(command: ParsedCommand): Promise<void> {
           throw new UsageError("`review reveal` requires a positive card id.");
         }
 
-        const result = study.revealReviewCard(cardId);
+        const result = executor.revealReviewCard(cardId);
         writeStdout(formatReviewReveal(result), { kind: "review-reveal" });
         return;
       }
       case "session": {
-        const signalsBefore = study.getCompanionSignals();
-        const runner = ReviewSessionRunner.fromDatabase(db);
-        const result = await runner.run({ limit });
-        writeStdout(formatReviewSessionSummary(result), { kind: "review-summary" });
-        const status = study.getCompanionSignals();
-        const returnAfterGap = buildReturnAfterGapSummary(
-          signalsBefore,
-          status,
-          result
-        );
+        const reviewSession = await executor.runReviewSessionWithDefaultTerminal({
+          limit
+        });
+        writeStdout(formatReviewSessionSummary(reviewSession.result), {
+          kind: "review-summary"
+        });
 
-        if (returnAfterGap) {
-          writeStdout(formatReturnAfterGapSummary(returnAfterGap), {
+        if (reviewSession.returnAfterGap) {
+          writeStdout(formatReturnAfterGapSummary(reviewSession.returnAfterGap), {
             kind: "return-summary"
           });
         }
 
         const settings = new AppSettingsRepository(db);
         const pack = loadCompanionPack(settings.getCompanionPackId());
-        const event = buildReviewSessionCompanionEvent(result, returnAfterGap);
-        const reaction = buildCompanionReaction(pack, event, status, 0);
+        const event = buildReviewSessionCompanionEvent(
+          reviewSession.result,
+          reviewSession.returnAfterGap
+        );
+        const reaction = buildCompanionReaction(
+          pack,
+          event,
+          reviewSession.signalsAfter,
+          0
+        );
 
         if (reaction.lineOverride) {
           writeStdout(reaction.lineOverride, "companion-line");
@@ -295,8 +298,8 @@ async function runRescue(command: ParsedCommand): Promise<void> {
   const db = openDatabase(command.flags.db);
 
   try {
-    const study = new StudyServices(db);
-    const candidate = study.getRescueCandidate(command.flags.at);
+    const executor = new ShellActionExecutor(db);
+    const candidate = executor.getRescueCandidate(command.flags.at);
     writeStdout(formatRescueCandidate(candidate), { kind: "rescue" });
 
     if (!candidate) {
@@ -305,7 +308,7 @@ async function runRescue(command: ParsedCommand): Promise<void> {
 
     const settings = new AppSettingsRepository(db);
     const pack = loadCompanionPack(settings.getCompanionPackId());
-    const status = study.getCompanionSignals(command.flags.at);
+    const status = executor.getCompanionSignals(command.flags.at);
     const introReaction = buildCompanionReaction(
       pack,
       {
@@ -321,35 +324,32 @@ async function runRescue(command: ParsedCommand): Promise<void> {
       writeStdout(introReaction.lineOverride, "companion-line");
     }
 
-    let completed = false;
-    const rescueServices = {
-      getNext: () => (completed ? null : candidate.card),
-      reveal: (cardId: number) => study.revealReviewCard(cardId),
-      grade: (cardId: number, grade: ReviewGrade, reviewedAt?: string) => {
-        const result = study.gradeReviewCard({ cardId, grade, reviewedAt });
-        completed = true;
-        return result;
-      }
-    };
+    const rescueSession = await executor.runRescueSessionWithDefaultTerminal({
+      now: command.flags.at
+    });
 
-    const runner = ReviewSessionRunner.withDefaultTerminal(rescueServices);
-    const result = await runner.run({ now: command.flags.at });
-    writeStdout(formatReviewSessionSummary(result), { kind: "review-summary" });
+    if (!rescueSession) {
+      return;
+    }
+
+    writeStdout(formatReviewSessionSummary(rescueSession.result), {
+      kind: "review-summary"
+    });
 
     const event =
-      result.reviewedCount > 0
+      rescueSession.result.reviewedCount > 0
         ? {
             type: "rescue_complete" as const,
             word: candidate.card.lemma
           }
         : {
             type: "review_session_quit" as const,
-            reviewedCount: result.reviewedCount
+            reviewedCount: rescueSession.result.reviewedCount
           };
     const reaction = buildCompanionReaction(
       pack,
       event,
-      study.getCompanionSignals(command.flags.at),
+      executor.getCompanionSignals(command.flags.at),
       0
     );
 
@@ -381,8 +381,8 @@ function runGrade(command: ParsedCommand): void {
   const db = openDatabase(command.flags.db);
 
   try {
-    const study = new StudyServices(db);
-    const result = study.gradeReviewCard({
+    const executor = new ShellActionExecutor(db);
+    const result = executor.gradeReviewCard({
       cardId,
       grade: grade as ReviewGrade,
       reviewedAt: command.flags.at
@@ -414,8 +414,8 @@ async function runAsk(command: ParsedCommand): Promise<void> {
   const db = openDatabase(command.flags.db);
 
   try {
-    const study = new StudyServices(db);
-    const result = await study.ask({
+    const executor = new ShellActionExecutor(db);
+    const result = await executor.ask({
       word,
       context,
       provider: command.flags.provider as LlmProviderName | undefined,
@@ -450,8 +450,8 @@ async function runTeach(command: ParsedCommand): Promise<void> {
   const db = openDatabase(command.flags.db);
 
   try {
-    const study = new StudyServices(db);
-    const result = await study.teach({
+    const executor = new ShellActionExecutor(db);
+    const result = await executor.teach({
       word,
       context,
       sourceLabel: command.flags.source,
@@ -471,10 +471,10 @@ function runPet(command: ParsedCommand): void {
   const db = openDatabase(command.flags.db);
 
   try {
-    const study = new StudyServices(db);
+    const executor = new ShellActionExecutor(db);
     const settings = new AppSettingsRepository(db);
-    const status = study.getCompanionSignals();
-    const home = study.getHomeProjection();
+    const status = executor.getCompanionSignals();
+    const home = executor.getHomeProjection();
     const pack = loadCompanionPack(
       command.flags.pack ?? settings.getCompanionPackId()
     );
@@ -505,10 +505,16 @@ async function runShell(command: ParsedCommand): Promise<void> {
 
   try {
     const terminal = new ReadlineShellTerminal();
+    const wantsLine = command.flags.line === "true";
+    const wantsTui = command.flags.tui === "true";
+    const useTui =
+      !wantsLine &&
+      (wantsTui ||
+        (process.stdin.isTTY === true && process.stdout.isTTY === true));
     const runner = new ShellRunner({
       db,
       terminal,
-      surface: command.flags.tui ? new TuiShellSurface(terminal) : undefined,
+      surface: useTui ? new TuiShellSurface(terminal) : undefined,
       packId: command.flags.pack
     });
     await runner.run();

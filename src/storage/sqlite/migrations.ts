@@ -139,45 +139,6 @@ const MIGRATIONS: string[] = [
     )
   `,
   `
-    CREATE TABLE IF NOT EXISTS conversation_sessions (
-      id INTEGER PRIMARY KEY,
-      channel TEXT NOT NULL,
-      active_pack_id TEXT NOT NULL,
-      status TEXT NOT NULL,
-      started_at TEXT NOT NULL,
-      ended_at TEXT
-    )
-  `,
-  `
-    CREATE TABLE IF NOT EXISTS conversation_turns (
-      id INTEGER PRIMARY KEY,
-      session_id INTEGER NOT NULL,
-      turn_index INTEGER NOT NULL,
-      speaker TEXT NOT NULL,
-      kind TEXT NOT NULL,
-      content_text TEXT NOT NULL,
-      payload_json TEXT,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES conversation_sessions(id) ON DELETE CASCADE
-    )
-  `,
-  `
-    CREATE INDEX IF NOT EXISTS idx_conversation_turns_session_turn
-    ON conversation_turns(session_id, turn_index)
-  `,
-  `
-    CREATE TABLE IF NOT EXISTS pending_conversation_actions (
-      id INTEGER PRIMARY KEY,
-      session_id INTEGER NOT NULL UNIQUE,
-      action_kind TEXT NOT NULL,
-      payload_json TEXT NOT NULL,
-      prompt_text TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES conversation_sessions(id) ON DELETE CASCADE
-    )
-  `,
-  `
     CREATE TABLE IF NOT EXISTS active_word_set (
       id INTEGER PRIMARY KEY,
       lexeme_id INTEGER NOT NULL,

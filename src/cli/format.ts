@@ -255,7 +255,6 @@ export function formatLlmStatus(summary: LlmStatusSummary): string {
   lines.push("Use: /model use <provider> [model] [--api-key KEY] [--api-url URL]");
   lines.push("Use: /model key <provider> <api-key>");
   lines.push("Use: /model url <provider> <api-url>");
-  lines.push("Alias: /models [provider]");
 
   return lines.join("\n");
 }

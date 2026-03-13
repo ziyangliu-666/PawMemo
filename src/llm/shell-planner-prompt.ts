@@ -1,12 +1,12 @@
-import type { ConversationTurnRecord } from "../core/domain/models";
 import type {
   CompanionPackDefinition,
   CompanionStatusSignals
 } from "../companion/types";
+import type { ShellPlannerTurn } from "../cli/shell-session-state";
 
 export interface ShellPlannerPromptInput {
   rawInput: string;
-  recentTurns: ConversationTurnRecord[];
+  recentTurns: ShellPlannerTurn[];
   activePack: CompanionPackDefinition;
   statusSignals: CompanionStatusSignals;
   pendingProposalText?: string | null;
@@ -27,7 +27,7 @@ function clipText(text: string, maxLength: number): string {
   return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
-function formatRecentTurns(turns: ConversationTurnRecord[]): string {
+function formatRecentTurns(turns: ShellPlannerTurn[]): string {
   if (turns.length === 0) {
     return "none";
   }

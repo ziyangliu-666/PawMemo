@@ -1,16 +1,29 @@
-import type { ConversationTurnKind } from "../core/domain/models";
 import { nowIso } from "../lib/time";
-import { ConversationSessionRepository } from "../storage/repositories/conversation-session-repository";
-import { ConversationTurnRepository } from "../storage/repositories/conversation-turn-repository";
-import { PendingConversationActionRepository } from "../storage/repositories/pending-conversation-action-repository";
-import type { SqliteDatabase } from "../storage/sqlite/database";
 import {
   deserializePendingShellProposal,
-  type PendingShellProposal,
   serializePendingShellProposal,
+  type PendingShellProposal,
   type ShellAction,
   type ShellAgentDecision
 } from "./shell-agent";
+
+export type ShellTurnSpeaker = "user" | "assistant";
+
+export type ShellTurnKind =
+  | "utterance"
+  | "message"
+  | "proposal"
+  | "action"
+  | "result"
+  | "error";
+
+export interface ShellPlannerTurn {
+  speaker: ShellTurnSpeaker;
+  kind: ShellTurnKind;
+  contentText: string;
+  createdAt: string;
+  payloadJson: string | null;
+}
 
 function assertNever(value: never): never {
   throw new Error(`Unexpected shell action: ${JSON.stringify(value)}`);
@@ -43,29 +56,9 @@ function describeAction(action: ShellAction): string {
   return assertNever(action);
 }
 
-export class ShellConversationSession {
-  private readonly sessions: ConversationSessionRepository;
-  private readonly turns: ConversationTurnRepository;
-  private readonly pendingActions: PendingConversationActionRepository;
-  private readonly sessionId: number;
-
-  constructor(
-    db: SqliteDatabase,
-    options: { activePackId: string; startedAt?: string }
-  ) {
-    this.sessions = new ConversationSessionRepository(db);
-    this.turns = new ConversationTurnRepository(db);
-    this.pendingActions = new PendingConversationActionRepository(db);
-    this.sessionId = this.sessions.create({
-      channel: "shell",
-      activePackId: options.activePackId,
-      startedAt: options.startedAt ?? nowIso()
-    }).id;
-  }
-
-  get id(): number {
-    return this.sessionId;
-  }
+export class ShellSessionState {
+  private readonly turns: ShellPlannerTurn[] = [];
+  private pendingProposalJson: string | null = null;
 
   recordUserUtterance(text: string, createdAt = nowIso()): void {
     this.appendTurn("user", "utterance", text, null, createdAt);
@@ -73,16 +66,11 @@ export class ShellConversationSession {
 
   applyDecision(decision: ShellAgentDecision, createdAt = nowIso()): void {
     if (decision.nextPendingProposal) {
-      this.pendingActions.upsert({
-        sessionId: this.sessionId,
-        actionKind: decision.nextPendingProposal.action.kind,
-        payloadJson: serializePendingShellProposal(decision.nextPendingProposal),
-        promptText: decision.nextPendingProposal.confirmationMessage,
-        createdAt,
-        updatedAt: createdAt
-      });
+      this.pendingProposalJson = serializePendingShellProposal(
+        decision.nextPendingProposal
+      );
     } else {
-      this.pendingActions.clear(this.sessionId);
+      this.pendingProposalJson = null;
     }
 
     if (decision.response.kind === "message") {
@@ -94,6 +82,7 @@ export class ShellConversationSession {
         : JSON.stringify({
             source: decision.response.source
           });
+
       this.appendTurn(
         "assistant",
         decision.nextPendingProposal ? "proposal" : "message",
@@ -117,18 +106,13 @@ export class ShellConversationSession {
   }
 
   getPendingProposal(): PendingShellProposal | null {
-    const pending = this.pendingActions.getBySession(this.sessionId);
-
-    return pending ? deserializePendingShellProposal(pending.payloadJson) : null;
+    return this.pendingProposalJson
+      ? deserializePendingShellProposal(this.pendingProposalJson)
+      : null;
   }
 
-  listRecentTurns(limit = 6) {
-    const turns = this.turns.listBySession(this.sessionId);
-    return limit > 0 ? turns.slice(-limit) : turns;
-  }
-
-  listRecentGlobal(limit = 20) {
-    return this.turns.listRecent(limit);
+  listRecentTurns(limit = 6): ShellPlannerTurn[] {
+    return limit > 0 ? this.turns.slice(-limit) : [...this.turns];
   }
 
   recordActionResult(
@@ -143,20 +127,14 @@ export class ShellConversationSession {
     this.appendTurn("assistant", "error", text, null, createdAt);
   }
 
-  end(endedAt = nowIso()): void {
-    this.pendingActions.clear(this.sessionId);
-    this.sessions.end(this.sessionId, endedAt);
-  }
-
   private appendTurn(
-    speaker: "user" | "assistant" | "system",
-    kind: ConversationTurnKind,
+    speaker: ShellTurnSpeaker,
+    kind: ShellTurnKind,
     contentText: string,
     payloadJson: string | null,
     createdAt: string
   ): void {
-    this.turns.append({
-      sessionId: this.sessionId,
+    this.turns.push({
       speaker,
       kind,
       contentText,

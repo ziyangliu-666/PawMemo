@@ -8,7 +8,7 @@ export type ShellTranscriptCellKind =
   | "assistant"
   | "help"
   | "data"
-  | "study";
+  | "study-card";
 
 export type ShellStudyCellKind = StudyCellIntent["kind"];
 export type ShellStudyCellPayload = StudyCellIntent;
@@ -56,6 +56,22 @@ export class ShellTranscriptModel {
     dataKind?: CliDataKind,
     study?: ShellStudyCellPayload
   ): ShellTranscriptCell {
+    const previous = this.committedCells[this.committedCells.length - 1];
+
+    if (
+      kind === "study-card" &&
+      previous?.kind === "study-card" &&
+      previous.study?.groupId &&
+      previous.study.groupId === study?.groupId
+    ) {
+      previous.text = previous.text.length > 0
+        ? `${previous.text}\n${text}`
+        : text;
+      previous.dataKind = dataKind ?? previous.dataKind;
+      previous.study = study ?? previous.study;
+      return previous;
+    }
+
     const cell: ShellTranscriptCell = {
       id: this.nextCellId,
       kind,
