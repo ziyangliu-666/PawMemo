@@ -1,0 +1,38 @@
+{
+  "name": "pawmemo",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Cute dog-centered vocabulary memory system with a deterministic learning core.",
+  "bin": {
+    "pawmemo": "dist/src/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "npm run build && node --test dist/test/**/*.test.js",
+    "capture": "npm run build && node dist/src/cli/index.js"
+  },
+  "keywords": [
+    "vocabulary",
+    "cli",
+    "sqlite",
+    "flashcards",
+    "spaced-repetition"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^12.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.0.0",
+    "eslint": "^10.0.3",
+    "globals": "^17.4.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.57.0"
+  }
+}

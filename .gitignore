@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.data/
+AGENTS.md
+doc/
+coverage/
+*.log
+*.tsbuildinfo
+*.db
+*.db-shm
+*.db-wal
