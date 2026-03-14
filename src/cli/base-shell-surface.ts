@@ -18,6 +18,7 @@ export interface ShellStreamHighlightConfig {
 
 export interface ShellTerminal extends ReviewSessionTerminal {
   writeRaw?(text: string): void;
+  getViewportSize?(): { columns: number; rows: number };
 }
 
 export interface ShellSurface {

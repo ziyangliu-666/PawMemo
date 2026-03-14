@@ -42,6 +42,13 @@ import {
   type ShellStudyCellPayload,
   type ShellTranscriptCell
 } from "./shell-transcript";
+import {
+  toSelectionPromptSnapshot,
+  type ShellFrameSnapshot,
+  type ShellLayoutSnapshot,
+  type ShellRegionSnapshot,
+  type ShellRenderedCursorSnapshot
+} from "./shell-frame-snapshot";
 const DEFAULT_SHELL_PROMPT = "› ";
 const ANSI_CLEAR_LINE = "\r\u001b[2K";
 const ANSI_CLEAR_SCREEN = "\u001b[2J\u001b[H";
@@ -80,6 +87,29 @@ type ComposerInputEvent =
   | { kind: "text"; text: string }
   | { kind: "paste"; text: string };
 
+export type ShellExternalKey =
+  | "submit"
+  | "tab"
+  | "interrupt"
+  | "eof"
+  | "backspace"
+  | "escape"
+  | "delete"
+  | "left"
+  | "right"
+  | "home"
+  | "end"
+  | "up"
+  | "down"
+  | "page-up"
+  | "page-down"
+  | "shift-tab";
+
+export type ShellExternalInputEvent =
+  | { kind: "key"; key: ShellExternalKey }
+  | { kind: "text"; text: string }
+  | { kind: "paste"; text: string };
+
 type ComposerRenderResult = {
   line: string;
   cursorColumn: number;
@@ -98,8 +128,17 @@ interface ActiveSelectionPrompt {
   resolve: (input: string) => void;
 }
 
+export class ShellSurfaceAbortError extends Error {
+  constructor(message = "Shell prompt aborted.") {
+    super(message);
+    this.name = "ShellSurfaceAbortError";
+  }
+}
+
 interface TuiShellSurfaceOptions {
   debug?: boolean;
+  inlineInputMode?: "terminal" | "external";
+  inputMode?: "terminal" | "external-prompt" | "external-composer";
 }
 
 export class ReadlineShellTerminal implements ShellTerminal {
@@ -365,6 +404,7 @@ export class TuiShellSurface extends BaseShellSurface {
   private slashSuggestions: string[] = [];
   private suggestionIndex = 0;
   private promptResolver: ((input: string) => void) | null = null;
+  private promptRejecter: ((error: Error) => void) | null = null;
   private activeSelectionPrompt: ActiveSelectionPrompt | null = null;
   private readonly inputDecoder = new StringDecoder("utf8");
   private inputBuffer = "";
@@ -372,6 +412,9 @@ export class TuiShellSurface extends BaseShellSurface {
   private blinkTimer: NodeJS.Timeout | null = null;
   private deferredPromptSubmit = false;
   private exitConfirmPending = false;
+  private readonly inputMode: "terminal" | "external-prompt" | "external-composer";
+  private promptArmed = false;
+  private promptEpoch = 0;
 
   setMode(mode: string, dueCount?: number): void {
     this.shellMode = mode;
@@ -387,9 +430,68 @@ export class TuiShellSurface extends BaseShellSurface {
   ) {
     super(terminal);
     this.debugEnabled = options.debug ?? false;
+    this.inputMode =
+      options.inputMode ??
+      (options.inlineInputMode === "external"
+        ? "external-prompt"
+        : "terminal");
     this.theme = createCliTheme({
       enabled: terminal.supportsColor ?? false
     });
+  }
+
+  getFrameSnapshot(): ShellFrameSnapshot {
+    return this.composeFrameSnapshot();
+  }
+
+  refresh(): void {
+    this.renderFrame();
+  }
+
+  applyExternalInput(event: ShellExternalInputEvent): boolean {
+    if (this.inputMode !== "external-composer") {
+      throw new Error("External input events require inputMode=external-composer.");
+    }
+
+    const composerEvent: ComposerInputEvent =
+      event.kind === "key"
+        ? { kind: event.key }
+        : event;
+
+    return this.handleComposerInputEvent(composerEvent);
+  }
+
+  submitExternalPrompt(text: string): boolean {
+    if (this.inputMode !== "external-composer") {
+      throw new Error("External prompt submission requires inputMode=external-composer.");
+    }
+
+    this.composerBuffer = text;
+    this.composerCursor = text.length;
+    this.updateAutocompleteState();
+    this.renderFrame();
+    return this.commitPromptSubmission();
+  }
+
+  abortActivePrompt(error: Error = new ShellSurfaceAbortError()): boolean {
+    if (!this.promptRejecter) {
+      return false;
+    }
+
+    const reject = this.promptRejecter;
+    this.promptResolver = null;
+    this.promptRejecter = null;
+    this.activeSelectionPrompt = null;
+    this.deferredPromptSubmit = false;
+    this.composerBuffer = "";
+    this.composerCursor = 0;
+    this.suggestionIndex = 0;
+    this.slashSuggestions = [];
+    this.exitConfirmPending = false;
+    this.clearInterruptHint();
+    this.renderFrame();
+    reject(error);
+    return true;
   }
 
   showInterruptHint(text: string): void {
@@ -428,7 +530,7 @@ export class TuiShellSurface extends BaseShellSurface {
     this.terminal.writeRaw?.(
       `${ANSI_ALT_SCREEN_ON}${ANSI_MOUSE_TRACKING_ON}${ANSI_CLEAR_SCREEN}`
     );
-    if (this.canUseInlineComposer()) {
+    if (this.shouldAttachTerminalInput()) {
       process.stdin.setRawMode?.(true);
       process.stdin.resume();
       process.stdin.on("data", this.onGlobalData);
@@ -884,7 +986,7 @@ export class TuiShellSurface extends BaseShellSurface {
     this.inputBuffer = "";
     this.bracketedPasteBuffer = null;
     if (this.active) {
-      if (this.canUseInlineComposer()) {
+      if (this.shouldAttachTerminalInput()) {
         process.stdin.off("data", this.onGlobalData);
         process.stdin.setRawMode?.(false);
         process.stdin.pause();
@@ -922,6 +1024,8 @@ export class TuiShellSurface extends BaseShellSurface {
 
   protected async promptWithLabel(promptText: string): Promise<string> {
     this.activePromptLabel = promptText;
+    this.promptArmed = true;
+    this.promptEpoch += 1;
     this.composerCursor = clampToNearestGraphemeBoundary(
       this.composerBuffer,
       this.composerCursor
@@ -940,6 +1044,8 @@ export class TuiShellSurface extends BaseShellSurface {
       return await this.terminal.prompt("");
     } finally {
       this.activePromptLabel = DEFAULT_SHELL_PROMPT;
+      this.promptRejecter = null;
+      this.promptArmed = false;
       this.renderFrame();
     }
   }
@@ -948,13 +1054,16 @@ export class TuiShellSurface extends BaseShellSurface {
     request: PromptSelectionRequest
   ): Promise<string> {
     this.activePromptLabel = request.promptText;
+    this.promptArmed = true;
+    this.promptEpoch += 1;
     this.composerBuffer = "";
     this.composerCursor = 0;
     this.renderFrame();
 
     try {
       if (this.canUseInlineComposer()) {
-        return await new Promise<string>((resolve) => {
+        return await new Promise<string>((resolve, reject) => {
+          this.promptRejecter = reject;
           this.activeSelectionPrompt = {
             request,
             selectedIndex: this.resolveInitialSelectionIndex(request),
@@ -970,6 +1079,8 @@ export class TuiShellSurface extends BaseShellSurface {
     } finally {
       this.activeSelectionPrompt = null;
       this.activePromptLabel = DEFAULT_SHELL_PROMPT;
+      this.promptRejecter = null;
+      this.promptArmed = false;
       this.renderFrame();
     }
   }
@@ -977,14 +1088,26 @@ export class TuiShellSurface extends BaseShellSurface {
   private canUseInlineComposer(): boolean {
     return Boolean(
       this.terminal.writeRaw &&
+      (this.inputMode === "external-composer" ||
+        (this.inputMode === "terminal" &&
+          process.stdin.isTTY &&
+          typeof process.stdin.setRawMode === "function"))
+    );
+  }
+
+  private shouldAttachTerminalInput(): boolean {
+    return Boolean(
+      this.inputMode === "terminal" &&
+      this.terminal.writeRaw &&
       process.stdin.isTTY &&
       typeof process.stdin.setRawMode === "function"
     );
   }
 
   private async promptWithInlineComposer(): Promise<string> {
-    return await new Promise<string>((resolve) => {
+    return await new Promise<string>((resolve, reject) => {
       this.promptResolver = resolve;
+      this.promptRejecter = reject;
       this.renderFrame();
       if (this.deferredPromptSubmit) {
         this.writeInputDebug("deferred-submit-replayed", {
@@ -1066,6 +1189,7 @@ export class TuiShellSurface extends BaseShellSurface {
 
     const resolver = this.promptResolver;
     this.promptResolver = null;
+    this.promptRejecter = null;
     this.deferredPromptSubmit = false;
     this.composerBuffer = "";
     this.composerCursor = 0;
@@ -1197,13 +1321,17 @@ export class TuiShellSurface extends BaseShellSurface {
     this.renderFrame();
   }
 
-  protected renderFrame(): void {
-    if (!this.terminal.writeRaw || !this.active) {
-      return;
-    }
+  private getViewportSize(): { columns: number; rows: number } {
+    const viewport = this.terminal.getViewportSize?.();
 
-    const columns = process.stdout.columns ?? DEFAULT_TUI_COLUMNS;
-    const rows = process.stdout.rows ?? DEFAULT_TUI_ROWS;
+    return {
+      columns: viewport?.columns ?? process.stdout.columns ?? DEFAULT_TUI_COLUMNS,
+      rows: viewport?.rows ?? process.stdout.rows ?? DEFAULT_TUI_ROWS
+    };
+  }
+
+  private composeFrameSnapshot(): ShellFrameSnapshot {
+    const { columns, rows } = this.getViewportSize();
     const headerLines = this.renderHeader(columns);
     const tipLines = this.renderTip();
     const statusLines = this.renderStatusLine(columns);
@@ -1213,21 +1341,20 @@ export class TuiShellSurface extends BaseShellSurface {
     const separatorLine = this.theme.muted("─".repeat(columns));
     const occupiedHeight =
       headerLines.length +
-      1 + // Top separator
+      1 +
       tipLines.length +
-      1 + // Above interactive separator
+      1 +
       statusLines.length +
       composerLines.length +
-      (footerLines.length > 0 ? 1 : 0) + // Below interactive separator
+      (footerLines.length > 0 ? 1 : 0) +
       footerLines.length;
     const transcriptHeight = Math.max(
       4,
       rows - occupiedHeight
     );
-
     const transcriptLines = this.renderTranscript(columns, transcriptHeight);
 
-    const frame = [
+    const frameLines = [
       ...headerLines,
       separatorLine,
       ...tipLines,
@@ -1239,8 +1366,7 @@ export class TuiShellSurface extends BaseShellSurface {
       ...footerLines
     ]
       .slice(0, rows)
-      .map(line => `${line}\u001b[K`)
-      .join("\n");
+      .map((line) => `${line}\u001b[K`);
 
     const composerCursorPosition = composerRender.cursorPosition
       ? {
@@ -1256,17 +1382,132 @@ export class TuiShellSurface extends BaseShellSurface {
         }
       : null;
 
-    const cursorSequence = composerCursorPosition
+    const cursor: ShellRenderedCursorSnapshot | null = composerCursorPosition
+      ? {
+          row: Math.min(rows - 1, composerCursorPosition.row),
+          column: Math.min(columns - 1, composerCursorPosition.column),
+          visible: Boolean(composerCursorPosition && this.promptArmed)
+        }
+      : null;
+
+    const layout: ShellLayoutSnapshot = {
+      header: this.buildRegionSnapshot(0, headerLines),
+      tip: this.buildRegionSnapshot(headerLines.length + 1, tipLines),
+      transcript: this.buildRegionSnapshot(
+        headerLines.length + 1 + tipLines.length,
+        transcriptLines
+      ),
+      status: this.buildRegionSnapshot(
+        headerLines.length + 1 + tipLines.length + transcriptLines.length + 1,
+        statusLines
+      ),
+      composer: this.buildRegionSnapshot(
+        headerLines.length +
+          1 +
+          tipLines.length +
+          transcriptLines.length +
+          1 +
+          statusLines.length,
+        composerLines
+      ),
+      footer: this.buildRegionSnapshot(
+        headerLines.length +
+          1 +
+          tipLines.length +
+          transcriptLines.length +
+          1 +
+          statusLines.length +
+          composerLines.length +
+          (footerLines.length > 0 ? 1 : 0),
+        footerLines
+      )
+    };
+
+    return {
+      displayName: this.displayName,
+      shellMode: this.shellMode,
+      dueCount: this.dueCount,
+      viewport: {
+        columns,
+        rows
+      },
+      transcript: this.transcript.snapshot(),
+      waiting:
+        this.waitingText === null || this.waitingLabel === null
+          ? null
+          : {
+              label: this.waitingLabel,
+              text: this.waitingText,
+              frameIndex: this.waitingFrame,
+              highlightStep: this.waitingHighlightStep
+            },
+      companionLine: this.activeCompanionLine,
+      interruptHint: this.interruptHint,
+      composer: {
+        promptLabel: this.activePromptLabel,
+        buffer: this.composerBuffer,
+        cursorIndex: this.composerCursor,
+        promptArmed: this.promptArmed,
+        promptEpoch: this.promptEpoch,
+        inlineInputEnabled: this.canUseInlineComposer(),
+        slashSuggestions: this.slashSuggestions.map((command, index) => ({
+          command,
+          description:
+            KNOWN_COMMANDS.find((entry) => entry.name === command)?.description ?? "",
+          selected: index === this.suggestionIndex
+        })),
+        selectionPrompt: this.activeSelectionPrompt
+          ? toSelectionPromptSnapshot(
+              this.activeSelectionPrompt.request,
+              this.activeSelectionPrompt.selectedIndex
+            )
+          : null,
+        exitConfirmPending: this.exitConfirmPending
+      },
+      layout,
+      rendered: {
+        lines: frameLines.map((line) => this.stripAnsi(line)),
+        frameText: frameLines.map((line) => this.stripAnsi(line)).join("\n"),
+        styledLines: frameLines,
+        cursor
+      }
+    };
+  }
+
+  private buildRegionSnapshot(
+    top: number,
+    lines: string[]
+  ): ShellRegionSnapshot {
+    return {
+      top,
+      height: lines.length,
+      lines: lines.map((line) => this.stripAnsi(line))
+    };
+  }
+
+  private stripAnsi(text: string): string {
+    return text.replace(
+      // eslint-disable-next-line no-control-regex
+      /\u001b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/g,
+      ""
+    );
+  }
+
+  protected renderFrame(): void {
+    if (!this.terminal.writeRaw || !this.active) {
+      return;
+    }
+
+    const snapshot = this.composeFrameSnapshot();
+    const frame = snapshot.rendered.styledLines.join("\n");
+    const cursorSequence = snapshot.rendered.cursor
       ? formatCursorPosition(
-          Math.min(rows - 1, composerCursorPosition.row),
-          Math.min(columns - 1, composerCursorPosition.column)
+          snapshot.rendered.cursor.row,
+          snapshot.rendered.cursor.column
         )
       : "";
-
     const cursorVisibility =
-      composerCursorPosition && this.promptResolver
-        ? ANSI_SHOW_CURSOR
-        : ANSI_HIDE_CURSOR;
+      snapshot.rendered.cursor?.visible ? ANSI_SHOW_CURSOR : ANSI_HIDE_CURSOR;
 
     this.terminal.writeRaw(`${ANSI_HOME}${frame}${cursorSequence}${cursorVisibility}`);
   }

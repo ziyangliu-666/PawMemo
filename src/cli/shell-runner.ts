@@ -61,6 +61,7 @@ import { asProviderName } from "./shell-command-helpers";
 import {
   LineShellSurface,
   ReadlineShellTerminal,
+  ShellSurfaceAbortError,
   type ShellSurface,
   type ShellTerminal
 } from "./shell-surface";
@@ -217,9 +218,18 @@ export class ShellRunner {
     try {
       while (true) {
         this.renderCompanion();
-        const rawInput = (
-          await this.surface.prompt()
-        ).trim();
+        let rawInput: string;
+        try {
+          rawInput = (
+            await this.surface.prompt()
+          ).trim();
+        } catch (error) {
+          if (error instanceof ShellSurfaceAbortError) {
+            return;
+          }
+
+          throw error;
+        }
 
         if (rawInput.length === 0) {
           this.applyReaction({ type: "idle_prompt" });
@@ -281,6 +291,10 @@ export class ShellRunner {
             return;
           }
         } catch (error) {
+          if (error instanceof ShellSurfaceAbortError) {
+            return;
+          }
+
           turnOutcome = "error";
           this.resetPlannerMessageStream(false);
           this.applyReaction({

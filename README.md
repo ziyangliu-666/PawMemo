@@ -50,6 +50,14 @@ pawmemo config llm
 pawmemo config llm use --provider openai --model gpt-5-mini --api-key "your-key"
 ```
 
+For a Windows-hosted local proxy that WSL can reach, PawMemo already supports an OpenAI-compatible base URL such as `http://172.24.160.1:7861/v1`.
+
+If you already keep a local Gemini/OpenAI-compatible reverse proxy on Windows, start it from that proxy repo and then configure PawMemo from WSL:
+
+```bash
+pawmemo config llm url --provider openai --api-url http://172.24.160.1:7861/v1
+```
+
 ## Quick Start
 
 Capture a word:

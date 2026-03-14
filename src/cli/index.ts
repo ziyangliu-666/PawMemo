@@ -43,6 +43,7 @@ import {
 import { ShellRunner } from "./shell-runner";
 import { ReadlineShellTerminal, TuiShellSurface } from "./shell-surface";
 import { ShellActionExecutor } from "./shell-action-executor";
+import { runShellMcpServer } from "./shell-mcp-server";
 import { openDatabase } from "../storage/sqlite/database";
 import { isLlmProviderName } from "../llm/provider-factory";
 
@@ -102,6 +103,7 @@ function printHelp(): void {
       "  pawmemo pet [--db path]",
       "  pawmemo pet [--pack PACK_ID] [--db path]",
       "  pawmemo shell [--line] [--debug] [--db path]",
+      "  pawmemo mcp [shell] [--db path]",
       "  pawmemo stats [--db path]",
       "  pawmemo config show [--db path]",
       "  pawmemo config llm [show] [--db path]",
@@ -128,6 +130,7 @@ function printHelp(): void {
       "  pawmemo shell",
       "  pawmemo shell --line",
       "  pawmemo shell --debug",
+      "  pawmemo mcp",
       "  pawmemo stats",
       "  pawmemo config llm",
       "  pawmemo config llm use --provider openai --model gpt-5-mini --api-key KEY",
@@ -524,6 +527,18 @@ async function runShell(command: ParsedCommand): Promise<void> {
   }
 }
 
+async function runMcp(command: ParsedCommand): Promise<void> {
+  const target = command.args[0];
+
+  if (target !== undefined && target !== "shell") {
+    throw new UsageError("`mcp` currently supports only the shell harness.");
+  }
+
+  await runShellMcpServer({
+    defaultDbPath: command.flags.db
+  });
+}
+
 async function runConfig(command: ParsedCommand): Promise<void> {
   const subcommand = command.args[0];
   const db = openDatabase(command.flags.db);
@@ -736,6 +751,9 @@ export async function main(argv: string[]): Promise<void> {
       return;
     case "shell":
       await runShell(command);
+      return;
+    case "mcp":
+      await runMcp(command);
       return;
     case "config":
       await runConfig(command);

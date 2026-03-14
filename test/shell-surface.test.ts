@@ -11,6 +11,10 @@ class FakeShellTerminal implements ShellTerminal {
   readonly writes: string[] = [];
   readonly rawWrites: string[] = [];
   readonly prompts: string[] = [];
+  private viewport = {
+    columns: 80,
+    rows: 24
+  };
 
   constructor(
     private readonly inputs: string[],
@@ -31,6 +35,10 @@ class FakeShellTerminal implements ShellTerminal {
   }
 
   close(): void {}
+
+  getViewportSize(): { columns: number; rows: number } {
+    return { ...this.viewport };
+  }
 }
 
 test("LineShellSurface renders the shell header and intro copy", () => {
@@ -158,6 +166,57 @@ test("TuiShellSurface renders a landing-style empty state instead of a blank tra
   const output = terminal.rawWrites.join("");
   assert.match(output, /Momo's Study Nook/);
   assert.match(output, /Save one word, ask one question, and let Momo keep it warm\./);
+});
+
+test("TuiShellSurface exposes a semantic frame snapshot for tooling", () => {
+  const terminal = new FakeShellTerminal([]);
+  const surface = new TuiShellSurface(terminal, {
+    inlineInputMode: "external"
+  });
+
+  surface.beginShell("Momo");
+  surface.writeAssistantReplyNow("Hello from transcript");
+
+  const snapshot = surface.getFrameSnapshot();
+
+  assert.equal(snapshot.displayName, "Momo");
+  assert.equal(snapshot.viewport.columns, 80);
+  assert.equal(snapshot.composer.promptLabel, "› ");
+  assert.equal(snapshot.transcript.committedCells[0]?.kind, "assistant");
+  assert.equal(snapshot.transcript.committedCells[0]?.text, "Hello from transcript");
+  assert.match(snapshot.rendered.frameText, /Hello from transcript/);
+  assert.ok(snapshot.layout.transcript.height >= 1);
+
+  surface.close();
+});
+
+test("TuiShellSurface can accept external composer input events", async () => {
+  const terminal = new FakeShellTerminal([]);
+  const surface = new TuiShellSurface(terminal, {
+    inputMode: "external-composer"
+  });
+
+  surface.beginShell("Momo");
+  const promptPromise = surface.prompt();
+
+  surface.applyExternalInput({ kind: "text", text: "/he" });
+  let snapshot = surface.getFrameSnapshot();
+  assert.equal(snapshot.composer.buffer, "/he");
+  assert.ok(snapshot.composer.slashSuggestions.some((entry) => entry.command === "/help"));
+
+  surface.applyExternalInput({ kind: "key", key: "tab" });
+  snapshot = surface.getFrameSnapshot();
+  assert.equal(snapshot.composer.buffer, "/help ");
+
+  surface.applyExternalInput({ kind: "key", key: "submit" });
+  const submitted = await promptPromise;
+  snapshot = surface.getFrameSnapshot();
+
+  assert.equal(submitted, "/help ");
+  assert.equal(snapshot.transcript.committedCells[0]?.kind, "user-line");
+  assert.equal(snapshot.transcript.committedCells[0]?.text, "/help ");
+
+  surface.close();
 });
 
 test("TuiShellSurface keeps the empty-state landing hero minimal even when due count changes", () => {
