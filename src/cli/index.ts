@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 
 import type { LlmProviderName, ReviewGrade } from "../core/domain/models";
-import { loadCompanionPack, listCompanionPacks } from "../companion/packs";
 import { renderCompanionCard } from "../companion/presenter";
-import { buildCompanionReaction } from "../companion/reaction-builder";
 import {
   ConfigurationError,
   DuplicateEncounterError,
@@ -46,11 +44,7 @@ import { ShellRunner } from "./shell-runner";
 import { ReadlineShellTerminal, TuiShellSurface } from "./shell-surface";
 import { ShellActionExecutor } from "./shell-action-executor";
 import { openDatabase } from "../storage/sqlite/database";
-import { AppSettingsRepository } from "../storage/repositories/app-settings-repository";
-import { nowIso } from "../lib/time";
 import { isLlmProviderName } from "../llm/provider-factory";
-import { hasAnyProviderEnvApiKey } from "../llm/provider-metadata";
-import { LlmConfigService } from "../llm/llm-config-service";
 
 const stdoutTheme = createCliTheme({
   enabled: shouldUseColor(process.stdout)
@@ -189,10 +183,7 @@ function runStats(command: ParsedCommand): void {
     const executor = new ShellActionExecutor(db);
     const summary = executor.getCompanionSignals();
     const recovery = executor.getRecoveryProjection();
-    const settings = new AppSettingsRepository(db);
-    const pack = loadCompanionPack(settings.getCompanionPackId());
-    const reaction = buildCompanionReaction(
-      pack,
+    const reaction = executor.buildCompanionReaction(
       {
         type: "stats_summary",
         todayReviewedCount: summary.todayReviewedCount,
@@ -202,10 +193,11 @@ function runStats(command: ParsedCommand): void {
         stableCount: summary.masteryBreakdown.stable
       },
       {
-        dueCount: summary.dueCount,
-        recentWord: null
-      },
-      0
+        status: {
+          dueCount: summary.dueCount,
+          recentWord: null
+        }
+      }
     );
 
     writeStdout(formatStatsResult(summary), { kind: "stats" });
@@ -277,17 +269,15 @@ async function runReview(command: ParsedCommand): Promise<void> {
           });
         }
 
-        const settings = new AppSettingsRepository(db);
-        const pack = loadCompanionPack(settings.getCompanionPackId());
         const event = buildReviewSessionCompanionEvent(
           reviewSession.result,
           reviewSession.returnAfterGap
         );
-        const reaction = buildCompanionReaction(
-          pack,
+        const reaction = executor.buildCompanionReaction(
           event,
-          reviewSession.signalsAfter,
-          0
+          {
+            status: reviewSession.signalsAfter
+          }
         );
 
         if (reaction.lineOverride) {
@@ -315,18 +305,17 @@ async function runRescue(command: ParsedCommand): Promise<void> {
       return;
     }
 
-    const settings = new AppSettingsRepository(db);
-    const pack = loadCompanionPack(settings.getCompanionPackId());
     const status = executor.getCompanionSignals(command.flags.at);
-    const introReaction = buildCompanionReaction(
-      pack,
+    const introReaction = executor.buildCompanionReaction(
       {
         type: "rescue_candidate",
         word: candidate.card.lemma,
         overdueDays: candidate.overdueDays
       },
-      status,
-      0
+      {
+        at: command.flags.at,
+        status
+      }
     );
 
     if (introReaction.lineOverride) {
@@ -355,11 +344,11 @@ async function runRescue(command: ParsedCommand): Promise<void> {
             type: "review_session_quit" as const,
             reviewedCount: rescueSession.result.reviewedCount
           };
-    const reaction = buildCompanionReaction(
-      pack,
+    const reaction = executor.buildCompanionReaction(
       event,
-      executor.getCompanionSignals(command.flags.at),
-      0
+      {
+        at: command.flags.at
+      }
     );
 
     if (reaction.lineOverride) {
@@ -481,17 +470,15 @@ function runPet(command: ParsedCommand): void {
 
   try {
     const executor = new ShellActionExecutor(db);
-    const settings = new AppSettingsRepository(db);
     const status = executor.getCompanionSignals();
     const home = executor.getHomeProjection();
-    const pack = loadCompanionPack(
-      command.flags.pack ?? settings.getCompanionPackId()
-    );
-    const reaction = buildCompanionReaction(
-      pack,
+    const pack = executor.getActiveCompanionPack(command.flags.pack);
+    const reaction = executor.buildCompanionReaction(
       { type: "status_snapshot" },
-      status,
-      0
+      {
+        packId: pack.id,
+        status
+      }
     );
 
     writeStdout(
@@ -542,17 +529,20 @@ async function runConfig(command: ParsedCommand): Promise<void> {
   const db = openDatabase(command.flags.db);
 
   try {
-    const settings = new AppSettingsRepository(db);
-    const llmConfig = new LlmConfigService(db);
+    const executor = new ShellActionExecutor(db);
 
     switch (subcommand) {
       case "show":
       case undefined: {
-        const apiKeyPresent =
-          settings.hasAnyStoredApiKey() || hasAnyProviderEnvApiKey();
-        writeStdout(formatSettings(settings.list(), apiKeyPresent), {
+        writeStdout(
+          formatSettings(
+            executor.listSettings(),
+            executor.hasAnyUsableProviderApiKey()
+          ),
+          {
           kind: "settings"
-        });
+          }
+        );
         return;
       }
       case "llm": {
@@ -567,7 +557,7 @@ async function runConfig(command: ParsedCommand): Promise<void> {
             : command.args[1];
 
         if (llmSubcommand === undefined || llmSubcommand === "show") {
-          writeStdout(formatLlmStatus(llmConfig.getStatusSummary()), {
+          writeStdout(formatLlmStatus(executor.getLlmStatus()), {
             kind: "llm-status"
           });
           return;
@@ -580,7 +570,7 @@ async function runConfig(command: ParsedCommand): Promise<void> {
             throw new UsageError(`Unsupported provider: ${provider}`);
           }
 
-          const result = await llmConfig.listModels({
+          const result = await executor.listModels({
             provider: provider as LlmProviderName | undefined,
             apiKey: command.flags["api-key"],
             apiUrl: command.flags["api-url"]
@@ -605,8 +595,8 @@ async function runConfig(command: ParsedCommand): Promise<void> {
             throw new UsageError("`config llm key` requires --api-key.");
           }
 
-          llmConfig.setProviderApiKey(provider, apiKey);
-          writeStdout(formatLlmStatus(llmConfig.getStatusSummary()), {
+          executor.setProviderApiKey(provider, apiKey);
+          writeStdout(formatLlmStatus(executor.getLlmStatus()), {
             kind: "llm-status"
           });
           return;
@@ -628,8 +618,8 @@ async function runConfig(command: ParsedCommand): Promise<void> {
             throw new UsageError("`config llm url` requires --api-url.");
           }
 
-          llmConfig.setProviderApiUrl(provider, apiUrl);
-          writeStdout(formatLlmStatus(llmConfig.getStatusSummary()), {
+          executor.setProviderApiUrl(provider, apiUrl);
+          writeStdout(formatLlmStatus(executor.getLlmStatus()), {
             kind: "llm-status"
           });
           return;
@@ -662,14 +652,14 @@ async function runConfig(command: ParsedCommand): Promise<void> {
           throw new UsageError(`Unsupported provider: ${provider}`);
         }
 
-        llmConfig.updateCurrentSettings({
+        executor.updateCurrentLlmSettings({
           provider,
           model,
           apiKey: apiKey ?? undefined,
           apiUrl: apiUrl ?? undefined
         });
 
-        writeStdout(formatLlmStatus(llmConfig.getStatusSummary()), {
+        writeStdout(formatLlmStatus(executor.getLlmStatus()), {
           kind: "llm-status"
         });
         return;
@@ -680,8 +670,8 @@ async function runConfig(command: ParsedCommand): Promise<void> {
         if (command.args[1] === "list") {
           writeStdout(
             formatCompanionPacks(
-              listCompanionPacks(),
-              settings.getCompanionPackId()
+              executor.listCompanionPacks(),
+              executor.getActiveCompanionPackId()
             ),
             { kind: "companion-packs" }
           );
@@ -692,13 +682,12 @@ async function runConfig(command: ParsedCommand): Promise<void> {
           throw new UsageError("`config companion` requires --pack or `list`.");
         }
 
-        const pack = loadCompanionPack(packFlag);
-        settings.setCompanionPackId(pack.id, nowIso());
+        executor.setActiveCompanionPack(packFlag);
 
         writeStdout(
           formatCompanionPacks(
-            listCompanionPacks(),
-            settings.getCompanionPackId()
+            executor.listCompanionPacks(),
+            executor.getActiveCompanionPackId()
           ),
           { kind: "companion-packs" }
         );

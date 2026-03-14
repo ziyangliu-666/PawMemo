@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { ShellConversationAgent } from "../src/cli/shell-agent";
+import { deserializePendingShellProposal } from "../src/cli/shell-contract";
 
 const plannerContext = {
   recentTurns: [],
@@ -230,4 +231,18 @@ test("ShellConversationAgent keeps slash commands on the local fast path", async
     },
     nextPendingProposal: null
   });
+});
+
+test("deserializePendingShellProposal rejects unsupported action kinds", () => {
+  assert.throws(
+    () =>
+      deserializePendingShellProposal(
+        JSON.stringify({
+          action: { kind: "stats" },
+          confirmationMessage: "confirm",
+          cancelMessage: "cancel"
+        })
+      ),
+    /unsupported action kind/i
+  );
 });

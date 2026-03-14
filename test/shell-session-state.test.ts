@@ -62,3 +62,23 @@ test("ShellSessionState keeps pending proposals and recent turns in memory", () 
     ]
   );
 });
+
+test("ShellSessionState clears an invalid pending proposal instead of crashing later", () => {
+  const state = new ShellSessionState() as ShellSessionState & {
+    getPendingProposal(): ReturnType<ShellSessionState["getPendingProposal"]>;
+  };
+  const internalState = state as unknown as {
+    pendingProposalJson: string | null;
+  };
+
+  internalState.pendingProposalJson = JSON.stringify({
+    action: {
+      kind: "teach"
+    },
+    confirmationMessage: "confirm",
+    cancelMessage: "cancel"
+  });
+
+  assert.equal(state.getPendingProposal(), null);
+  assert.equal(state.getPendingProposal(), null);
+});

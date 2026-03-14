@@ -1,11 +1,7 @@
 import { performance } from "node:perf_hooks";
 import {
-  loadCompanionPack,
-} from "../companion/packs";
-import {
   renderCompanionPresenceLine
 } from "../companion/presenter";
-import { buildCompanionReaction } from "../companion/reaction-builder";
 import type {
   CompanionMood,
   CompanionEvent,
@@ -20,22 +16,13 @@ import type {
   TeachWordInput
 } from "../core/domain/models";
 import { detectCardPromptLanguage } from "../review/card-language";
-import { isLlmProviderName } from "../llm/provider-factory";
 import type { LlmProvider } from "../llm/types";
 import {
-  ConfigurationError,
   CardAuthorContractError,
-  DuplicateEncounterError,
-  ExplanationContractError,
-  NotFoundError,
-  ProviderRequestError,
-  ReviewCardNotDueError,
   UsageError
 } from "../lib/errors";
 import type { SqliteDatabase } from "../storage/sqlite/database";
 import {
-  formatLlmModelList,
-  formatLlmStatus,
   formatNextReviewCard,
   formatReviewReveal
 } from "./format";
@@ -59,18 +46,21 @@ import {
 import { buildReviewSessionCompanionEvent } from "./review-session-feedback";
 import {
   ShellConversationAgent,
-  type ShellAction,
-  type ShellAgentDecision,
-  type ShellAgentResponse
+  type ShellAgentContext
 } from "./shell-agent";
+import type {
+  ShellAction,
+  ShellAgentDecision,
+  ShellAgentResponse
+} from "./shell-contract";
 import { LlmShellPlanner } from "./shell-planner";
 import type { CliDataKind } from "./theme";
 import { parseCommand, tokenizeCommandLine } from "./command-parser";
-import { AppSettingsRepository } from "../storage/repositories/app-settings-repository";
+import { ShellControlCommands } from "./shell-control-commands";
+import { asProviderName } from "./shell-command-helpers";
 import {
   LineShellSurface,
   ReadlineShellTerminal,
-  type ShellStreamHighlightConfig,
   type ShellSurface,
   type ShellTerminal
 } from "./shell-surface";
@@ -83,6 +73,13 @@ import {
   createTeachDraftIntent,
   flattenStudyCardIntent
 } from "./study-card-view";
+import {
+  describeShellAction,
+  describeShellAgentResponse,
+  writeShellDebug,
+  writeShellPerf,
+  type ShellDebugField
+} from "./shell-debug";
 
 export interface ShellRunnerOptions {
   db: SqliteDatabase;
@@ -98,8 +95,6 @@ interface ShellState {
   frame: number;
   lineOverride?: string;
 }
-
-type ShellDebugField = string | number | boolean | null | undefined;
 
 const SHELL_WAIT_DELAY_MS = 180;
 
@@ -125,30 +120,6 @@ function parseOptionalLimit(rawValue: string | undefined): number | undefined {
   }
 
   return limit;
-}
-
-function asProviderName(value: string | undefined): LlmProviderName | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  if (!isLlmProviderName(value)) {
-    throw new UsageError(`Unsupported provider: ${value}`);
-  }
-
-  return value;
-}
-
-function formatPerfMs(value: number): string {
-  if (value >= 1000) {
-    return `${(value / 1000).toFixed(2)}s`;
-  }
-
-  if (value >= 100) {
-    return `${value.toFixed(0)}ms`;
-  }
-
-  return `${value.toFixed(1)}ms`;
 }
 
 function buildTeachDraftSelectionRequest(
@@ -198,34 +169,15 @@ function buildTeachDraftSelectionRequest(
   };
 }
 
-function parseHighlightPercent(rawValue: string | undefined): number {
-  const value = Number.parseFloat(rawValue ?? "");
-
-  if (!Number.isFinite(value) || value <= 0 || value > 100) {
-    throw new UsageError("`/highlight` requires a percent between 0 and 100.");
-  }
-
-  return value;
-}
-
-function parseHighlightTotalChars(rawValue: string | undefined): number {
-  const value = Number.parseInt(rawValue ?? "", 10);
-
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new UsageError("`/highlight` requires a positive total character count.");
-  }
-
-  return value;
-}
 
 export class ShellRunner {
   private readonly surface: ShellSurface;
   private readonly conversationAgent: ShellConversationAgent;
   private readonly sessionState = new ShellSessionState();
   private readonly executor: ShellActionExecutor;
+  private readonly controlCommands: ShellControlCommands;
   private readonly activePack: CompanionPackDefinition;
   private readonly debugEnabled: boolean;
-  private streamHighlight: ShellStreamHighlightConfig | null = null;
   private readonly shellState: ShellState = {
     mood: "idle",
     frame: 0
@@ -237,18 +189,26 @@ export class ShellRunner {
     this.surface = options.surface ?? new LineShellSurface(terminal);
     this.executor = new ShellActionExecutor(options.db, options.providerFactory);
     this.debugEnabled = options.debug ?? false;
-    const settings = new AppSettingsRepository(options.db);
-    this.activePack = loadCompanionPack(
-      options.packId ?? settings.getCompanionPackId()
-    );
+    this.activePack = this.executor.getActiveCompanionPack(options.packId);
+    this.controlCommands = new ShellControlCommands({
+      executor: this.executor,
+      sessionState: this.sessionState,
+      writeHelp: (text) => this.surface.writeHelp(text),
+      writeAssistantReplyNow: (text) => this.writeAssistantReplyNow(text),
+      writeDataBlock: (text, kind = "plain") => this.writeDataBlock(text, kind),
+      readShellSelection: (request) => this.readShellSelection(request),
+      runWithStudyWait: (label, fields, work) =>
+        this.withMeasuredStage(label, fields, work, { type: "study_wait" }),
+      setStreamHighlight: (config) => this.surface.setStreamHighlight?.(config)
+    });
     this.conversationAgent = new ShellConversationAgent(
-      new LlmShellPlanner(options.db, options.providerFactory)
+      new LlmShellPlanner(this.executor, options.providerFactory)
     );
   }
 
   async run(): Promise<void> {
     this.surface.beginShell(this.activePack.displayName);
-    this.writeDebug("shell start", {
+    writeShellDebug(this.surface, this.debugEnabled, "shell start", {
       pack: this.activePack.id,
       surface: this.surface.constructor.name,
       debug: this.debugEnabled
@@ -286,7 +246,7 @@ export class ShellRunner {
                   recentTurns: this.sessionState.listRecentTurns(6),
                   activePack: this.activePack,
                   statusSignals: this.getStatusSignals()
-                },
+                } satisfies ShellAgentContext,
                 onPlannerMessageDelta: (delta) => {
                   this.onPlannerMessageDelta(delta);
                 }
@@ -295,11 +255,13 @@ export class ShellRunner {
               () => this.plannerMessageStreamStarted
             );
           const preparedDecision = await this.prepareDecision(decision);
-          this.writeDebug(
+          writeShellDebug(
+            this.surface,
+            this.debugEnabled,
             "agent response",
-            this.describeAgentResponse(preparedDecision.response)
+            describeShellAgentResponse(preparedDecision.response)
           );
-          this.writeDebug("pending proposal", {
+          writeShellDebug(this.surface, this.debugEnabled, "pending proposal", {
             next: preparedDecision.nextPendingProposal?.action.kind ?? "none"
           });
           this.sessionState.applyDecision(preparedDecision);
@@ -332,11 +294,17 @@ export class ShellRunner {
           });
           this.writeShellError(error);
         } finally {
-          this.writePerf("turn", performance.now() - turnStartedAt, {
+          writeShellPerf(
+            this.surface,
+            this.debugEnabled,
+            "turn",
+            performance.now() - turnStartedAt,
+            {
             outcome: turnOutcome,
             exit: shouldExit,
             inputLength: rawInput.length
-          });
+            }
+          );
         }
       }
     } finally {
@@ -427,7 +395,9 @@ export class ShellRunner {
         { word: input.word },
         () =>
           this.executor.draftTeach(input, (event) => {
-            this.writePerf(
+            writeShellPerf(
+              this.surface,
+              this.debugEnabled,
               `teach ${event.stage.replace(/_/g, " ")}`,
               event.elapsedMs,
               { word: input.word }
@@ -459,25 +429,32 @@ export class ShellRunner {
   private async executeAction(
     action: ShellAction
   ): Promise<boolean> {
-    this.writeDebug("execute action", this.describeAction(action));
+    writeShellDebug(
+      this.surface,
+      this.debugEnabled,
+      "execute action",
+      describeShellAction(action)
+    );
 
     return this.withMeasuredStage(
       "execute action",
-      this.describeAction(action),
+      describeShellAction(action),
       async () => {
         switch (action.kind) {
           case "quit": {
-            const reaction = buildCompanionReaction(
-              this.activePack,
+            const reaction = this.executor.buildCompanionReaction(
               { type: "shell_exit" },
-              this.getStatusSignals(),
-              this.shellState.frame
+              {
+                frame: this.shellState.frame,
+                packId: this.activePack.id,
+                status: this.getStatusSignals()
+              }
             );
             this.surface.renderCompanionLine(reaction.lineOverride ?? "See you soon.");
             return true;
           }
           case "help":
-            this.writeShellHelp();
+            await this.controlCommands.handle(parseCommand(["help"]));
             this.applyReaction({ type: "help" });
             return false;
           case "pet":
@@ -547,13 +524,15 @@ export class ShellRunner {
   }
 
   private applyReaction(
-    event: Parameters<typeof buildCompanionReaction>[1]
+    event: CompanionEvent
   ): void {
-    const reaction = buildCompanionReaction(
-      this.activePack,
+    const reaction = this.executor.buildCompanionReaction(
       event,
-      this.getStatusSignals(),
-      this.shellState.frame
+      {
+        frame: this.shellState.frame,
+        packId: this.activePack.id,
+        status: this.getStatusSignals()
+      }
     );
     this.shellState.mood = reaction.mood;
     this.shellState.lineOverride = reaction.lineOverride;
@@ -561,11 +540,13 @@ export class ShellRunner {
 
   private renderTransientCompanion(event: CompanionEvent): void {
     const status = this.getStatusSignals();
-    const reaction = buildCompanionReaction(
-      this.activePack,
+    const reaction = this.executor.buildCompanionReaction(
       event,
-      status,
-      this.shellState.frame
+      {
+        frame: this.shellState.frame,
+        packId: this.activePack.id,
+        status
+      }
     );
     this.surface.showWaitingIndicator(
       this.activePack.displayName,
@@ -603,7 +584,7 @@ export class ShellRunner {
       shouldRender = false;
       clearTimeout(timer);
       this.surface.clearWaitingIndicator();
-      this.writePerf(label, performance.now() - startedAt, {
+      writeShellPerf(this.surface, this.debugEnabled, label, performance.now() - startedAt, {
         ...fields,
         waitingShown,
         ok: !failed
@@ -614,11 +595,14 @@ export class ShellRunner {
   private async handleCommand(
     command: ReturnType<typeof parseCommand>
   ): Promise<void> {
-    switch (command.name) {
-      case "help":
-        this.writeShellHelp();
+    if (await this.controlCommands.handle(command)) {
+      if (command.name === "help") {
         this.applyReaction({ type: "help" });
-        return;
+      }
+      return;
+    }
+
+    switch (command.name) {
       case "pet":
         this.applyReaction({ type: "pet_ping" });
         return;
@@ -637,17 +621,8 @@ export class ShellRunner {
       case "stats":
         this.runStats();
         return;
-      case "highlight":
-        this.runHighlight(command);
-        return;
       case "rescue":
         await this.runRescue();
-        return;
-      case "model":
-        await this.runModel(command);
-        return;
-      case "models":
-        await this.runModels(command);
         return;
       default:
         throw new UsageError(`Unknown shell command: ${command.name}`);
@@ -724,254 +699,6 @@ export class ShellRunner {
     });
   }
 
-  private async runModel(command: ReturnType<typeof parseCommand>): Promise<void> {
-    const subcommand = command.args[0];
-
-    if (subcommand === undefined || subcommand === "show") {
-      const formatted = formatLlmStatus(this.executor.getLlmStatus());
-      this.writeDataBlock(formatted, "llm-status");
-      this.sessionState.recordActionResult(
-        formatted,
-        JSON.stringify({ type: "model-status" })
-      );
-      return;
-    }
-
-    if (subcommand === "use" || subcommand === "set") {
-      const provider = asProviderName(command.args[1]);
-      const model = command.args[2];
-
-      if (!provider) {
-        throw new UsageError("`/model use` requires a provider name.");
-      }
-
-      this.executor.updateCurrentLlmSettings({
-        provider,
-        model,
-        apiKey: command.flags["api-key"] ?? undefined,
-        apiUrl: command.flags["api-url"] ?? undefined
-      });
-
-      const formatted = formatLlmStatus(this.executor.getLlmStatus());
-      this.writeDataBlock(formatted, "llm-status");
-      this.sessionState.recordActionResult(
-        formatted,
-        JSON.stringify({
-          type: "model-set",
-          provider,
-          model: this.executor.getLlmStatus().model
-        })
-      );
-      return;
-    }
-
-    if (subcommand === "list") {
-      const provider = asProviderName(command.args[1] ?? command.flags.provider);
-      const result = await this.withMeasuredStage(
-        "model list",
-        {
-          provider: provider ?? "active"
-        },
-        () =>
-          this.executor.listModels({
-            provider,
-            apiKey: command.flags["api-key"],
-            apiUrl: command.flags["api-url"]
-          }),
-        { type: "study_wait" }
-      );
-      const formatted = formatLlmModelList(result);
-      this.writeDataBlock(formatted, "llm-model-list");
-      this.sessionState.recordActionResult(
-        formatted,
-        JSON.stringify({
-          type: "model-list",
-          provider: result.provider,
-          count: result.models.length
-        })
-      );
-      return;
-    }
-
-    if (subcommand === "url") {
-      const provider = asProviderName(command.args[1]);
-      const apiUrl = command.args[2] ?? command.flags["api-url"];
-
-      if (!provider) {
-        throw new UsageError("`/model url` requires a provider name.");
-      }
-
-      if (!apiUrl?.trim()) {
-        throw new UsageError("`/model url` requires an API URL value.");
-      }
-
-      this.executor.setProviderApiUrl(provider, apiUrl);
-      const formatted = formatLlmStatus(this.executor.getLlmStatus());
-      this.writeDataBlock(formatted, "llm-status");
-      this.sessionState.recordActionResult(
-        formatted,
-        JSON.stringify({
-          type: "model-url",
-          provider
-        })
-      );
-      return;
-    }
-
-    if (subcommand === "key") {
-      const provider = asProviderName(command.args[1]);
-      const apiKey = command.args[2];
-
-      if (!provider) {
-        throw new UsageError("`/model key` requires a provider name.");
-      }
-
-      if (!apiKey?.trim()) {
-        throw new UsageError("`/model key` requires an API key value.");
-      }
-
-      this.executor.setProviderApiKey(provider, apiKey);
-      const formatted = formatLlmStatus(this.executor.getLlmStatus());
-      this.writeDataBlock(formatted, "llm-status");
-      this.sessionState.recordActionResult(
-        formatted,
-        JSON.stringify({
-          type: "model-key",
-          provider
-        })
-      );
-      return;
-    }
-
-    const provider = asProviderName(subcommand);
-    const modelToken = command.args[1];
-
-    if (!provider) {
-      throw new UsageError(
-        [
-          "`/model` expects one of:",
-          "  `/model`",
-          "  `/model list [provider]`",
-          "  `/model use <provider> [model] [--api-key KEY] [--api-url URL]`",
-          "  `/model key <provider> <api-key>`",
-          "  `/model url <provider> <api-url>`"
-        ].join("\n")
-      );
-    }
-
-    this.executor.updateCurrentLlmSettings({
-      provider,
-      model: modelToken,
-      apiKey: command.flags["api-key"] ?? undefined,
-      apiUrl: command.flags["api-url"] ?? undefined
-    });
-
-    const formatted = formatLlmStatus(this.executor.getLlmStatus());
-    this.writeDataBlock(formatted, "llm-status");
-    this.sessionState.recordActionResult(
-      formatted,
-      JSON.stringify({
-        type: "model-set",
-        provider,
-        model: this.executor.getLlmStatus().model
-      })
-    );
-  }
-
-  private async runModels(command: ReturnType<typeof parseCommand>): Promise<void> {
-    if (command.args.length > 1) {
-      throw new UsageError("`/models` expects zero arguments or one provider name.");
-    }
-
-    const status = this.executor.getLlmStatus();
-    const selectedProvider =
-      command.args[0] !== undefined
-        ? asProviderName(command.args[0])
-        : ((await this.readShellSelection({
-            promptText: "Pick a provider",
-            initialValue: status.provider,
-            choices: status.providers.map((provider) => ({
-              value: provider.provider,
-              label: provider.provider,
-              aliases: [provider.provider[0] ?? provider.provider],
-              description: [
-                provider.selected ? "current" : "saved",
-                provider.model,
-                `key ${provider.apiKeyPresent ? "yes" : "no"}`,
-                provider.apiUrl ? `url ${provider.apiUrl}` : null
-              ]
-                .filter((value) => Boolean(value))
-                .join(" · ")
-            }))
-          })) as LlmProviderName);
-
-    if (!selectedProvider) {
-      throw new UsageError("`/models` needs a provider choice.");
-    }
-
-    const result = await this.withMeasuredStage(
-      "model picker list",
-      {
-        provider: selectedProvider
-      },
-      () =>
-        this.executor.listModels({
-          provider: selectedProvider
-        }),
-      { type: "study_wait" }
-    );
-
-    if (result.models.length === 0) {
-      const formatted = formatLlmModelList(result);
-      this.writeDataBlock(formatted, "llm-model-list");
-      this.sessionState.recordActionResult(
-        formatted,
-        JSON.stringify({
-          type: "model-picker-empty",
-          provider: result.provider
-        })
-      );
-      return;
-    }
-
-    const currentMarker =
-      result.provider === result.currentProvider ? "current" : "saved";
-    const selectedModel = await this.readShellSelection({
-      promptText: `Pick a ${selectedProvider} model`,
-      initialValue: result.currentModel,
-      choices: result.models.map((model, index) => ({
-        value: model.id,
-        label: model.id,
-        aliases: [String(index + 1)],
-        description: [
-          model.id === result.currentModel ? currentMarker : null,
-          model.displayName && model.displayName !== model.id
-            ? model.displayName
-            : null,
-          model.ownedBy
-        ]
-          .filter((value) => Boolean(value))
-          .join(" · ")
-      }))
-    });
-
-    this.executor.updateCurrentLlmSettings({
-      provider: selectedProvider,
-      model: selectedModel
-    });
-
-    const formatted = formatLlmStatus(this.executor.getLlmStatus());
-    this.writeDataBlock(formatted, "llm-status");
-    this.sessionState.recordActionResult(
-      formatted,
-      JSON.stringify({
-        type: "model-picker-set",
-        provider: selectedProvider,
-        model: selectedModel
-      })
-    );
-  }
-
   private runStats(): void {
     const summary = this.executor.getCompanionSignals();
     const home = this.executor.getHomeProjection();
@@ -993,61 +720,6 @@ export class ShellRunner {
       reviewedLast7Days: summary.reviewedLast7Days,
       stableCount: summary.masteryBreakdown.stable
     });
-  }
-
-  private runHighlight(command: ReturnType<typeof parseCommand>): void {
-    const subcommand = command.args[0]?.toLowerCase();
-
-    if (subcommand === undefined || subcommand === "show") {
-      const natural = this.streamHighlight
-        ? `Stream highlight is set to ${this.streamHighlight.percent}% of ${this.streamHighlight.totalChars} characters.`
-        : "Stream highlight is using the default automatic window.";
-      this.writeAssistantReplyNow(natural);
-      this.sessionState.recordActionResult(
-        natural,
-        JSON.stringify({
-          type: "highlight-show",
-          percent: this.streamHighlight?.percent ?? null,
-          totalChars: this.streamHighlight?.totalChars ?? null
-        })
-      );
-      return;
-    }
-
-    if (subcommand === "off" || subcommand === "reset") {
-      this.streamHighlight = null;
-      this.surface.setStreamHighlight?.(null);
-      const natural = "Stream highlight is back on the default automatic window.";
-      this.writeAssistantReplyNow(natural);
-      this.sessionState.recordActionResult(
-        natural,
-        JSON.stringify({
-          type: "highlight-reset"
-        })
-      );
-      return;
-    }
-
-    const percent = parseHighlightPercent(command.args[0]);
-    const totalChars = parseHighlightTotalChars(command.args[1] ?? command.flags.chars);
-
-    this.streamHighlight = {
-      percent,
-      totalChars
-    };
-    this.surface.setStreamHighlight?.(this.streamHighlight);
-    const highlightChars = Math.max(1, Math.round((totalChars * percent) / 100));
-    const natural = `Stream highlight now uses ${percent}% of ${totalChars} characters, so I'll accent the newest ${highlightChars} while a reply is still streaming.`;
-    this.writeAssistantReplyNow(natural);
-    this.sessionState.recordActionResult(
-      natural,
-      JSON.stringify({
-        type: "highlight-set",
-        percent,
-        totalChars,
-        highlightChars
-      })
-    );
   }
 
   private async runReview(command: ReturnType<typeof parseCommand>): Promise<void> {
@@ -1170,15 +842,17 @@ export class ShellRunner {
     const intro = presentShellRescueIntro(candidate, home);
     this.writeAssistantReplyNow(intro);
 
-    const introEvent = buildCompanionReaction(
-      this.activePack,
+    const introEvent = this.executor.buildCompanionReaction(
       {
         type: "rescue_candidate",
         word: candidate.card.lemma,
         overdueDays: candidate.overdueDays
       },
-      status,
-      this.shellState.frame
+      {
+        frame: this.shellState.frame,
+        packId: this.activePack.id,
+        status
+      }
     );
     this.shellState.mood = introEvent.mood;
     if (introEvent.lineOverride) {
@@ -1225,46 +899,6 @@ export class ShellRunner {
     );
   }
 
-  private writeShellHelp(): void {
-    const helpText = [
-      "Natural input:",
-      "  what does luminous mean?",
-      "  save ephemeral from: The beauty was ephemeral.",
-      "  remember luminous = 发光的",
-      "  let's review",
-      "  rescue one for me",
-      "",
-      "Slash commands:",
-      "  /help",
-      "  /pet",
-      "  /capture <word> --ctx \"...\" --gloss \"...\" [--source label]",
-      "  /ask <word> --ctx \"...\" [--provider PROVIDER] [--model MODEL] [--api-key KEY] [--api-url URL]",
-      "  /teach <word> --ctx \"...\" [--source label] [--provider PROVIDER] [--model MODEL] [--api-key KEY] [--api-url URL]",
-      "  /review [session] [--limit N]",
-      "  /review next",
-      "  /review reveal <card-id>",
-      "  /rescue",
-      "  /stats",
-      "  /highlight",
-      "  /highlight <percent> <total-chars>",
-      "  /highlight off",
-      "  /models [provider]",
-      "  /model",
-      "  /model show",
-      "  /model list [provider]",
-      "  /model use <provider> [model] [--api-key KEY] [--api-url URL]",
-      "  /model key <provider> <api-key>",
-      "  /model url <provider> <api-url>",
-      "  /quit | /exit"
-    ].join("\n");
-
-    this.surface.writeHelp(helpText);
-    this.sessionState.recordActionResult(
-      helpText,
-      JSON.stringify({ type: "help" })
-    );
-  }
-
   private async readShellSelection(
     request: PromptSelectionRequest
   ): Promise<string> {
@@ -1288,93 +922,6 @@ export class ShellRunner {
           return resolved;
         }
       }
-    }
-  }
-
-  private writeDebug(
-    event: string,
-    fields: Record<string, ShellDebugField>
-  ): void {
-    if (!this.debugEnabled) {
-      return;
-    }
-
-    const lines = [`Debug: ${event}`];
-
-    for (const [key, value] of Object.entries(fields)) {
-      if (value === undefined) {
-        continue;
-      }
-
-      lines.push(`${key}: ${String(value)}`);
-    }
-
-    this.surface.writeDataBlock(lines.join("\n"), "plain");
-  }
-
-  private writePerf(
-    event: string,
-    elapsedMs: number,
-    fields: Record<string, ShellDebugField>
-  ): void {
-    if (!this.debugEnabled) {
-      return;
-    }
-
-    const lines = [`Perf: ${event}`, `elapsed: ${formatPerfMs(elapsedMs)}`];
-
-    for (const [key, value] of Object.entries(fields)) {
-      if (value === undefined) {
-        continue;
-      }
-
-      lines.push(`${key}: ${String(value)}`);
-    }
-
-    this.surface.writeDataBlock(lines.join("\n"), "plain");
-  }
-
-  private describeAgentResponse(
-    response: ShellAgentResponse
-  ): Record<string, ShellDebugField> {
-    if (response.kind === "message") {
-      return {
-        source: response.source,
-        kind: response.kind,
-        mood: response.mood,
-        text: response.text
-      };
-    }
-
-    return {
-      source: response.source,
-      kind: response.kind,
-      action: response.action.kind
-    };
-  }
-
-  private describeAction(
-    action: ShellAction
-  ): Record<string, ShellDebugField> {
-    switch (action.kind) {
-      case "ask":
-      case "capture":
-      case "teach-clarify-context":
-      case "teach":
-      case "teach-confirm":
-        return {
-          action: action.kind,
-          word: action.input.word
-        };
-      case "command":
-        return {
-          action: action.kind,
-          rawInput: action.rawInput
-        };
-      default:
-        return {
-          action: action.kind
-        };
     }
   }
 
@@ -1412,7 +959,9 @@ export class ShellRunner {
       { word: input.word },
       () =>
         this.executor.draftTeach(input, (event) => {
-          this.writePerf(
+          writeShellPerf(
+            this.surface,
+            this.debugEnabled,
             `teach ${event.stage.replace(/_/g, " ")}`,
             event.elapsedMs,
             { word: input.word }
@@ -1587,10 +1136,16 @@ export class ShellRunner {
       type: "capture_success",
       word: result.lexeme.lemma
     });
-    this.writePerf("capture executor", performance.now() - startedAt, {
+    writeShellPerf(
+      this.surface,
+      this.debugEnabled,
+      "capture executor",
+      performance.now() - startedAt,
+      {
       word: result.lexeme.lemma,
       cards: result.cards.length
-    });
+      }
+    );
   }
 
   private async runAskInput(
@@ -1637,7 +1192,9 @@ export class ShellRunner {
       { word: input.word },
       () =>
         this.executor.teach(input, (event) => {
-          this.writePerf(
+          writeShellPerf(
+            this.surface,
+            this.debugEnabled,
             `teach ${event.stage.replace(/_/g, " ")}`,
             event.elapsedMs,
             { word: input.word }
@@ -1675,7 +1232,9 @@ export class ShellRunner {
       { word: input.word },
       () =>
         this.executor.confirmTeachDraft(input, draft, (event) => {
-          this.writePerf(
+          writeShellPerf(
+            this.surface,
+            this.debugEnabled,
             `teach ${event.stage.replace(/_/g, " ")}`,
             event.elapsedMs,
             { word: input.word }
@@ -1701,41 +1260,13 @@ export class ShellRunner {
 
   private writeShellError(error: unknown): void {
     if (this.debugEnabled && error instanceof Error) {
-      this.writeDebug("error", {
+      writeShellDebug(this.surface, this.debugEnabled, "error", {
         name: error.name,
         message: error.message
       });
     }
 
     const natural = presentShellError(error);
-
-    if (error instanceof ConfigurationError) {
-      this.sessionState.recordError(natural);
-      this.writeAssistantReplyNow(natural);
-
-      return;
-    }
-
-    if (
-      error instanceof UsageError ||
-      error instanceof DuplicateEncounterError ||
-      error instanceof NotFoundError ||
-      error instanceof ReviewCardNotDueError ||
-      error instanceof ExplanationContractError ||
-      error instanceof CardAuthorContractError ||
-      error instanceof ProviderRequestError
-    ) {
-      this.sessionState.recordError(natural);
-      this.writeAssistantReplyNow(natural);
-      return;
-    }
-
-    if (error instanceof Error) {
-      this.sessionState.recordError(natural);
-      this.writeAssistantReplyNow(natural);
-      return;
-    }
-
     this.sessionState.recordError(natural);
     this.writeAssistantReplyNow(natural);
   }

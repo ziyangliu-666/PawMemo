@@ -1,6 +1,7 @@
 import type {
   AskWordInput,
   CaptureWordInput,
+  LlmSettings,
   LlmProviderName,
   TeachWordInput
 } from "../core/domain/models";
@@ -9,15 +10,13 @@ import type {
   CompanionPackDefinition,
   CompanionStatusSignals
 } from "../companion/types";
-import { AppSettingsRepository } from "../storage/repositories/app-settings-repository";
-import type { SqliteDatabase } from "../storage/sqlite/database";
 import { buildShellPlannerPrompt } from "../llm/shell-planner-prompt";
 import { createLlmProvider } from "../llm/provider-factory";
 import { resolveApiKey } from "../llm/resolve-api-key";
 import { parseStructuredJson } from "../llm/structured-output";
 import type { LlmProvider } from "../llm/types";
 import { ProviderRequestError } from "../lib/errors";
-import type { ShellPlannerTurn } from "./shell-session-state";
+import type { ShellPlannerTurn } from "./shell-contract";
 
 export interface ShellPlannerInput {
   rawInput: string;
@@ -34,6 +33,10 @@ export interface ShellPlannerStreamCallbacks {
 export interface ShellPlannerRunOptions {
   onMessageDelta?: (delta: string) => void | Promise<void>;
   signal?: AbortSignal;
+}
+
+export interface ShellPlannerSettingsReader {
+  getCurrentLlmSettings(): LlmSettings;
 }
 
 export type ShellPlannerDecision =
@@ -63,6 +66,18 @@ interface ParsedJsonString {
   value: string;
   nextIndex: number;
   complete: boolean;
+}
+
+function toShellPlannerPayload(
+  payload: Record<string, unknown>
+): ShellPlannerPayload {
+  return {
+    kind: payload.kind,
+    message: payload.message,
+    word: payload.word,
+    context: payload.context,
+    gloss: payload.gloss
+  };
 }
 
 function readTrimmedString(value: unknown): string | null {
@@ -351,12 +366,74 @@ function skipJsonValue(input: string, startIndex: number): number {
     return parsed?.nextIndex ?? input.length;
   }
 
+  if (char === "{" || char === "[") {
+    const stack: string[] = [char === "{" ? "}" : "]"];
+    let cursor = index + 1;
+    let escape = false;
+    let inString = false;
+
+    while (cursor < input.length) {
+      const valueChar = input[cursor] ?? "";
+
+      if (inString) {
+        if (escape) {
+          escape = false;
+        } else if (valueChar === "\\") {
+          escape = true;
+        } else if (valueChar === "\"") {
+          inString = false;
+        }
+
+        cursor += 1;
+        continue;
+      }
+
+      if (valueChar === "\"") {
+        inString = true;
+        cursor += 1;
+        continue;
+      }
+
+      if (valueChar === "{") {
+        stack.push("}");
+        cursor += 1;
+        continue;
+      }
+
+      if (valueChar === "[") {
+        stack.push("]");
+        cursor += 1;
+        continue;
+      }
+
+      if (valueChar === "}" || valueChar === "]") {
+        const expected = stack.pop();
+
+        if (expected !== valueChar) {
+          return cursor;
+        }
+
+        cursor += 1;
+
+        if (stack.length === 0) {
+          return cursor;
+        }
+
+        continue;
+      }
+
+      cursor += 1;
+    }
+
+    return cursor;
+  }
+
   let cursor = index;
 
   while (cursor < input.length) {
     const valueChar = input[cursor] ?? "";
 
-    if (valueChar === "," || valueChar === "}") {
+    if (valueChar === "," || valueChar === "}" || valueChar === "]") {
       return cursor;
     }
 
@@ -371,24 +448,32 @@ function readTopLevelStringFieldPrefix(
   targetKey: string
 ): ParsedJsonString | null {
   let index = 0;
-  let depth = 0;
+  const stack: string[] = [];
 
   while (index < input.length) {
     const char = input[index] ?? "";
 
     if (char === "{") {
-      depth += 1;
+      stack.push("}");
       index += 1;
       continue;
     }
 
-    if (char === "}") {
-      depth = Math.max(0, depth - 1);
+    if (char === "[") {
+      stack.push("]");
       index += 1;
       continue;
     }
 
-    if (depth !== 1) {
+    if (char === "}" || char === "]") {
+      if (stack.length > 0) {
+        stack.pop();
+      }
+      index += 1;
+      continue;
+    }
+
+    if (!(stack.length === 1 && stack[0] === "}")) {
       index += 1;
       continue;
     }
@@ -470,20 +555,16 @@ class ShellPlannerMessageStreamer {
 }
 
 export class LlmShellPlanner {
-  private readonly settings: AppSettingsRepository;
-
   constructor(
-    private readonly db: SqliteDatabase,
+    private readonly settings: ShellPlannerSettingsReader,
     private readonly providerFactory: (name: LlmProviderName) => LlmProvider = createLlmProvider
-  ) {
-    this.settings = new AppSettingsRepository(db);
-  }
+  ) {}
 
   async plan(
     input: ShellPlannerInput,
     options: ShellPlannerRunOptions = {}
   ): Promise<ShellPlannerDecision> {
-    const llmSettings = this.settings.getLlmSettings();
+    const llmSettings = this.settings.getCurrentLlmSettings();
     const prompt = buildShellPlannerPrompt(input);
     const apiKey = resolveApiKey(
       llmSettings.provider,
@@ -515,7 +596,7 @@ export class LlmShellPlanner {
             }
           })
         : await provider.generateText(request);
-    const payload = parseStructuredJson<ShellPlannerPayload>(response.text);
+    const payload = parseStructuredJson(response.text, toShellPlannerPayload);
 
     return normalizeShellPlannerPayload(payload, input.rawInput);
   }

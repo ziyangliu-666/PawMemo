@@ -1,8 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 
 import {
   buildShellPlannerPrompt
@@ -17,11 +14,7 @@ import type {
   LlmTextResponse,
   LlmTextStreamRequest
 } from "../src/llm/types";
-import { openDatabase } from "../src/storage/sqlite/database";
-
-function tempDbPath(name: string): string {
-  return path.join(os.tmpdir(), `pawmemo-${name}-${Date.now()}-${Math.random()}.db`);
-}
+import type { LlmSettings } from "../src/core/domain/models";
 
 class FakePlannerProvider implements LlmProvider {
   readonly name = "gemini" as const;
@@ -59,6 +52,22 @@ class FakeStreamingPlannerProvider extends FakePlannerProvider {
       text: '{"kind":"reply","message":"你好，我是 PawMemo。"}'
     };
   }
+}
+
+function createPlannerSettings(
+  overrides: Partial<LlmSettings> = {}
+): { getCurrentLlmSettings(): LlmSettings } {
+  return {
+    getCurrentLlmSettings() {
+      return {
+        provider: "gemini",
+        model: "gemini-2.5-flash",
+        apiKey: null,
+        apiUrl: null,
+        ...overrides
+      };
+    }
+  };
 }
 
 test("normalizeShellPlannerPayload maps reply output", () => {
@@ -203,8 +212,6 @@ test("buildShellPlannerPrompt layers structured companion prompt fields into pla
 });
 
 test("LlmShellPlanner uses the provider for chat planning when configured", async () => {
-  const dbPath = tempDbPath("shell-planner");
-  const db = openDatabase(dbPath);
   const priorApiKey = process.env.GEMINI_API_KEY;
   process.env.GEMINI_API_KEY = "test-key";
 
@@ -215,7 +222,7 @@ test("LlmShellPlanner uses the provider for chat planning when configured", asyn
         message: "我是 PawMemo 的学习 shell。"
       })
     );
-    const planner = new LlmShellPlanner(db, () => provider);
+    const planner = new LlmShellPlanner(createPlannerSettings(), () => provider);
     const result = await planner.plan({
       rawInput: "这是啥",
       recentTurns: [],
@@ -255,15 +262,10 @@ test("LlmShellPlanner uses the provider for chat planning when configured", asyn
     } else {
       process.env.GEMINI_API_KEY = priorApiKey;
     }
-
-    db.close();
-    fs.rmSync(dbPath, { force: true });
   }
 });
 
 test("LlmShellPlanner can surface streamed planner message deltas for reply turns", async () => {
-  const dbPath = tempDbPath("shell-planner-stream");
-  const db = openDatabase(dbPath);
   const priorApiKey = process.env.GEMINI_API_KEY;
   process.env.GEMINI_API_KEY = "test-key";
 
@@ -271,7 +273,7 @@ test("LlmShellPlanner can surface streamed planner message deltas for reply turn
     const provider = new FakeStreamingPlannerProvider(
       '{"kind":"reply","message":"你好，我是 PawMemo。"}'
     );
-    const planner = new LlmShellPlanner(db, () => provider);
+    const planner = new LlmShellPlanner(createPlannerSettings(), () => provider);
     const streamed: string[] = [];
     const result = await planner.plan(
       {
@@ -318,22 +320,94 @@ test("LlmShellPlanner can surface streamed planner message deltas for reply turn
     } else {
       process.env.GEMINI_API_KEY = priorApiKey;
     }
+  }
+});
 
-    db.close();
-    fs.rmSync(dbPath, { force: true });
+test("LlmShellPlanner keeps streaming when an earlier array field contains nested objects", async () => {
+  const priorApiKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = "test-key";
+
+  try {
+    const provider = new (class extends FakePlannerProvider {
+      streamCalls = 0;
+
+      async generateTextStream(
+        request: LlmTextStreamRequest
+      ): Promise<LlmTextResponse> {
+        this.streamCalls += 1;
+        this.lastRequest = request;
+
+        for (const chunk of [
+          '{"kind":"reply","tags":[{"label":"warm"}],"message":"你',
+          "好，",
+          'PawMemo"}'
+        ]) {
+          await request.onTextDelta(chunk);
+        }
+
+        return {
+          text: '{"kind":"reply","tags":[{"label":"warm"}],"message":"你好，PawMemo"}'
+        };
+      }
+    })('{"kind":"reply","tags":[{"label":"warm"}],"message":"你好，PawMemo"}');
+    const planner = new LlmShellPlanner(createPlannerSettings(), () => provider);
+    const streamed: string[] = [];
+    const result = await planner.plan(
+      {
+        rawInput: "你好",
+        recentTurns: [],
+        activePack: {
+          id: "momo",
+          displayName: "Momo",
+          styleLabel: "loyal",
+          romanceMode: "off",
+          description: "A loyal study dog.",
+          personality: "Calm and eager to help.",
+          scenario: "Already sharing the study nook.",
+          exampleMessages: ["I'm here with the word pile."],
+          postHistoryInstructions: ["Stay in the current scene after reading history."],
+          toneRules: ["Sound warm and steady."],
+          boundaryRules: ["Do not overshadow study help."],
+          avatarFrames: {},
+          moodLines: {},
+          reactions: {}
+        },
+        statusSignals: {
+          dueCount: 0,
+          recentWord: null
+        }
+      },
+      {
+        onMessageDelta: (delta) => {
+          streamed.push(delta);
+        }
+      }
+    );
+
+    assert.equal(provider.streamCalls, 1);
+    assert.equal(streamed.join(""), "你好，PawMemo");
+    assert.deepEqual(result, {
+      kind: "reply",
+      mood: "curious",
+      message: "你好，PawMemo"
+    });
+  } finally {
+    if (priorApiKey === undefined) {
+      delete process.env.GEMINI_API_KEY;
+    } else {
+      process.env.GEMINI_API_KEY = priorApiKey;
+    }
   }
 });
 
 test("LlmShellPlanner fails when no API key is configured", async () => {
-  const dbPath = tempDbPath("shell-planner-fallback");
-  const db = openDatabase(dbPath);
   const priorApiKey = process.env.GEMINI_API_KEY;
   const priorGoogleApiKey = process.env.GOOGLE_API_KEY;
   delete process.env.GEMINI_API_KEY;
   delete process.env.GOOGLE_API_KEY;
 
   try {
-    const planner = new LlmShellPlanner(db, () => {
+    const planner = new LlmShellPlanner(createPlannerSettings(), () => {
       throw new Error("provider should not be constructed without an API key");
     });
     await assert.rejects(() =>
@@ -374,8 +448,5 @@ test("LlmShellPlanner fails when no API key is configured", async () => {
     } else {
       process.env.GOOGLE_API_KEY = priorGoogleApiKey;
     }
-
-    db.close();
-    fs.rmSync(dbPath, { force: true });
   }
 });

@@ -1,4 +1,5 @@
 import type {
+  AppSettingRecord,
   AskWordInput,
   AskWordResult,
   CaptureWordInput,
@@ -16,6 +17,16 @@ import type {
   TeachWordInput,
   TeachWordResult
 } from "../core/domain/models";
+import { loadCompanionPack, listCompanionPacks } from "../companion/packs";
+import { buildCompanionReaction } from "../companion/reaction-builder";
+import type {
+  CompanionEvent,
+  CompanionPackDefinition,
+  CompanionPackSummary,
+  CompanionReactionResult,
+  CompanionStatusSignals
+} from "../companion/types";
+import { hasAnyProviderEnvApiKey } from "../llm/provider-metadata";
 import { StudyServices } from "../core/orchestration/study-services";
 import type { LlmProvider } from "../llm/types";
 import {
@@ -25,6 +36,7 @@ import {
 } from "../llm/llm-config-service";
 import type { SqliteDatabase } from "../storage/sqlite/database";
 import {
+  createStudyReviewSessionServices,
   createDefaultReviewSessionTerminal,
   ReviewSessionRunner,
   type ReviewSessionCopy,
@@ -38,6 +50,8 @@ import {
   type ReturnAfterGapSummary
 } from "./review-session-feedback";
 import type { TeachPerfHook } from "../core/orchestration/teach-word";
+import { AppSettingsRepository } from "../storage/repositories/app-settings-repository";
+import { nowIso } from "../lib/time";
 
 export interface ExecutedReviewSession {
   result: ReviewSessionRunResult;
@@ -53,9 +67,17 @@ export interface ExecutedRescueSession {
   result: ReviewSessionRunResult;
 }
 
+interface CompanionReactionOptions {
+  at?: string;
+  frame?: number;
+  packId?: string;
+  status?: CompanionStatusSignals;
+}
+
 export class ShellActionExecutor {
   private readonly study: StudyServices;
   private readonly llmConfig: LlmConfigService;
+  private readonly settings: AppSettingsRepository;
 
   constructor(
     db: SqliteDatabase,
@@ -63,6 +85,7 @@ export class ShellActionExecutor {
   ) {
     this.study = new StudyServices(db, providerFactory);
     this.llmConfig = new LlmConfigService(db, providerFactory);
+    this.settings = new AppSettingsRepository(db);
   }
 
   capture(input: CaptureWordInput): CaptureWordResult {
@@ -120,6 +143,49 @@ export class ShellActionExecutor {
     return this.study.getCompanionSignals(at);
   }
 
+  listSettings(): AppSettingRecord[] {
+    return this.settings.list();
+  }
+
+  hasAnyUsableProviderApiKey(): boolean {
+    return this.settings.hasAnyStoredApiKey() || hasAnyProviderEnvApiKey();
+  }
+
+  getActiveCompanionPack(packId?: string): CompanionPackDefinition {
+    return loadCompanionPack(packId ?? this.settings.getCompanionPackId());
+  }
+
+  getActiveCompanionPackId(): string {
+    return this.settings.getCompanionPackId();
+  }
+
+  listCompanionPacks(): CompanionPackSummary[] {
+    return listCompanionPacks();
+  }
+
+  setActiveCompanionPack(packId: string): CompanionPackDefinition {
+    const pack = loadCompanionPack(packId);
+    this.settings.setCompanionPackId(pack.id, nowIso());
+    return pack;
+  }
+
+  buildCompanionReaction(
+    event: CompanionEvent,
+    options: CompanionReactionOptions = {}
+  ): CompanionReactionResult {
+    const status = options.status ?? this.getCompanionSignals(options.at);
+
+    return buildCompanionReaction(
+      this.getActiveCompanionPack(options.packId),
+      event,
+      {
+        dueCount: status.dueCount,
+        recentWord: status.recentWord
+      },
+      options.frame ?? 0
+    );
+  }
+
   getHomeProjection(at?: string): HomeProjectionResult {
     return this.study.getHomeProjection(at);
   }
@@ -138,15 +204,8 @@ export class ShellActionExecutor {
     copy?: ReviewSessionCopy
   ): Promise<ExecutedReviewSession> {
     const signalsBefore = this.study.getCompanionSignals(options.now);
-    const reviewServices: ReviewSessionServices = {
-      getNext: (now?: string) => this.study.getNextReviewCard(now),
-      reveal: (cardId: number) => this.study.revealReviewCard(cardId),
-      grade: (cardId, grade, reviewedAt) =>
-        this.study.gradeReviewCard({ cardId, grade, reviewedAt })
-    };
-
     const result = await ReviewSessionRunner.withServices(
-      reviewServices,
+      createStudyReviewSessionServices(this.study),
       terminal,
       copy
     ).run(options);
@@ -222,6 +281,10 @@ export class ShellActionExecutor {
 
   getLlmStatus(): LlmStatusSummary {
     return this.llmConfig.getStatusSummary();
+  }
+
+  getCurrentLlmSettings() {
+    return this.llmConfig.getCurrentSettings();
   }
 
   listModels(options: {

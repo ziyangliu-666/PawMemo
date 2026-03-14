@@ -161,28 +161,22 @@ function createDefaultReviewSessionCopy(): ReviewSessionCopy {
   };
 }
 
-class ServiceBackedReviewSessionServices implements ReviewSessionServices {
-  private readonly study: StudyServices;
-
-  constructor(db: SqliteDatabase) {
-    this.study = new StudyServices(db);
-  }
-
-  getNext(now?: string): DueReviewCard | null {
-    return this.study.getNextReviewCard(now);
-  }
-
-  reveal(cardId: number): ReviewRevealResult {
-    return this.study.revealReviewCard(cardId);
-  }
-
-  grade(cardId: number, grade: ReviewGrade, reviewedAt?: string): GradeReviewCardResult {
-    return this.study.gradeReviewCard({
-      cardId,
-      grade,
-      reviewedAt
-    });
-  }
+export function createStudyReviewSessionServices(
+  study: Pick<
+    StudyServices,
+    "getNextReviewCard" | "revealReviewCard" | "gradeReviewCard"
+  >
+): ReviewSessionServices {
+  return {
+    getNext: (now?: string) => study.getNextReviewCard(now),
+    reveal: (cardId: number) => study.revealReviewCard(cardId),
+    grade: (cardId: number, grade: ReviewGrade, reviewedAt?: string) =>
+      study.gradeReviewCard({
+        cardId,
+        grade,
+        reviewedAt
+      })
+  };
 }
 
 export class ReadlineReviewSessionTerminal implements ReviewSessionTerminal {
@@ -325,8 +319,9 @@ export class ReviewSessionRunner {
     db: SqliteDatabase,
     copy?: ReviewSessionCopy
   ): ReviewSessionRunner {
+    const study = new StudyServices(db);
     return new ReviewSessionRunner(
-      new ServiceBackedReviewSessionServices(db),
+      createStudyReviewSessionServices(study),
       new ReadlineReviewSessionTerminal(),
       copy
     );
@@ -337,8 +332,9 @@ export class ReviewSessionRunner {
     terminal: ReviewSessionTerminal,
     copy?: ReviewSessionCopy
   ): ReviewSessionRunner {
+    const study = new StudyServices(db);
     return new ReviewSessionRunner(
-      new ServiceBackedReviewSessionServices(db),
+      createStudyReviewSessionServices(study),
       terminal,
       copy
     );

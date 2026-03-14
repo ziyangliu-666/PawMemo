@@ -1,0 +1,128 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import Database from "better-sqlite3";
+
+import { openDatabase } from "../src/storage/sqlite/database";
+import { LATEST_SCHEMA_VERSION } from "../src/storage/sqlite/migrations";
+
+function tempDbPath(name: string): string {
+  return path.join(os.tmpdir(), `pawmemo-${name}-${Date.now()}-${Math.random()}.db`);
+}
+
+test("openDatabase stores and reuses the latest schema version", () => {
+  const dbPath = tempDbPath("migrations-versioned");
+  const first = openDatabase(dbPath);
+
+  try {
+    const row = first
+      .prepare<[], { version: number }>(
+        `
+          SELECT version
+          FROM schema_version
+          WHERE id = 1
+        `
+      )
+      .get();
+
+    assert.equal(row?.version, LATEST_SCHEMA_VERSION);
+
+    const deadTables = first
+      .prepare<[string, string], { name: string }>(
+        `
+          SELECT name
+          FROM sqlite_master
+          WHERE type = ? AND name = ?
+        `
+      );
+
+    assert.equal(deadTables.get("table", "relationship_memories"), undefined);
+    assert.equal(deadTables.get("table", "session_summaries"), undefined);
+  } finally {
+    first.close();
+  }
+
+  const second = openDatabase(dbPath);
+
+  try {
+    const row = second
+      .prepare<[], { version: number }>(
+        `
+          SELECT version
+          FROM schema_version
+          WHERE id = 1
+        `
+      )
+      .get();
+
+    assert.equal(row?.version, LATEST_SCHEMA_VERSION);
+  } finally {
+    second.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
+test("runMigrations upgrades a legacy database and drops dead tables", () => {
+  const dbPath = tempDbPath("migrations-legacy");
+  const legacyDb = new Database(dbPath);
+
+  try {
+    legacyDb.exec(`
+      CREATE TABLE relationship_memories (
+        id INTEGER PRIMARY KEY,
+        kind TEXT NOT NULL,
+        content TEXT NOT NULL,
+        salience REAL NOT NULL DEFAULT 0,
+        source_event_id INTEGER,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE session_summaries (
+        id INTEGER PRIMARY KEY,
+        session_key TEXT NOT NULL,
+        summary_text TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        ended_at TEXT NOT NULL
+      );
+    `);
+  } finally {
+    legacyDb.close();
+  }
+
+  const migrated = openDatabase(dbPath);
+
+  try {
+    const tables = migrated
+      .prepare<[], { name: string }>(
+        `
+          SELECT name
+          FROM sqlite_master
+          WHERE type = 'table'
+        `
+      )
+      .all()
+      .map((row) => row.name);
+
+    assert.ok(tables.includes("schema_version"));
+    assert.ok(tables.includes("users"));
+    assert.ok(!tables.includes("relationship_memories"));
+    assert.ok(!tables.includes("session_summaries"));
+
+    const version = migrated
+      .prepare<[], { version: number }>(
+        `
+          SELECT version
+          FROM schema_version
+          WHERE id = 1
+        `
+      )
+      .get();
+
+    assert.equal(version?.version, LATEST_SCHEMA_VERSION);
+  } finally {
+    migrated.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});

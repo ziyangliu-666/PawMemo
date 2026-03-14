@@ -2,7 +2,7 @@ import type {
   CompanionPackDefinition,
   CompanionStatusSignals
 } from "../companion/types";
-import type { ShellPlannerTurn } from "../cli/shell-session-state";
+import type { ShellPlannerTurn } from "../cli/shell-contract";
 
 export interface ShellPlannerPromptInput {
   rawInput: string;

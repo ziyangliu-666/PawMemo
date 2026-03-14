@@ -1,63 +1,31 @@
+import type { TeachWordInput } from "../core/domain/models";
 import type {
-  AskWordInput,
-  CaptureWordInput,
-  TeachWordDraftResult,
-  TeachWordInput
-} from "../core/domain/models";
-import type {
-  CompanionMood,
   CompanionPackDefinition,
   CompanionStatusSignals
 } from "../companion/types";
 import { ConfigurationError } from "../lib/errors";
 import { interpretShellInput } from "./shell-intent";
-import type { ShellPlannerTurn } from "./shell-session-state";
+import type {
+  PendingShellProposal,
+  ShellAgentDecision,
+  ShellPlannerTurn
+} from "./shell-contract";
 import type { LlmShellPlanner, ShellPlannerDecision } from "./shell-planner";
-
-export type ShellAction =
-  | { kind: "help" }
-  | { kind: "quit" }
-  | { kind: "pet" }
-  | { kind: "stats" }
-  | { kind: "rescue" }
-  | { kind: "review-session" }
-  | { kind: "command"; rawInput: string }
-  | { kind: "ask"; input: AskWordInput }
-  | { kind: "capture"; input: CaptureWordInput }
-  | { kind: "teach-clarify-context"; input: TeachWordInput }
-  | { kind: "teach"; input: TeachWordInput }
-  | { kind: "teach-confirm"; input: TeachWordInput; draft: TeachWordDraftResult };
-
-export interface PendingShellProposal {
-  action: ShellAction;
-  confirmationMessage: string;
-  cancelMessage: string;
-  teachDraft?: TeachWordDraftResult;
-}
-
-export type ShellAgentResponse =
-  | {
-      kind: "execute";
-      action: ShellAction;
-      source: "fast-path" | "planner";
-    }
-  | {
-      kind: "message";
-      mood: CompanionMood;
-      text: string;
-      source: "fast-path" | "planner";
-    };
-
-export interface ShellAgentDecision {
-  response: ShellAgentResponse;
-  nextPendingProposal: PendingShellProposal | null;
-}
 
 export interface ShellAgentContext {
   recentTurns: ShellPlannerTurn[];
   activePack: CompanionPackDefinition;
   statusSignals: CompanionStatusSignals;
 }
+
+const SIMPLE_EXECUTE_KINDS = [
+  "help",
+  "pet",
+  "stats",
+  "rescue",
+  "review-session",
+  "quit"
+] as const;
 
 function buildTeachProposal(
   input: TeachWordInput,
@@ -168,6 +136,21 @@ export class ShellConversationAgent {
     planned: ShellPlannerDecision,
     pendingProposal: PendingShellProposal | null
   ): ShellAgentDecision {
+    if (
+      SIMPLE_EXECUTE_KINDS.includes(
+        planned.kind as (typeof SIMPLE_EXECUTE_KINDS)[number]
+      )
+    ) {
+      return {
+        response: {
+          kind: "execute",
+          action: { kind: planned.kind as (typeof SIMPLE_EXECUTE_KINDS)[number] },
+          source: "planner"
+        },
+        nextPendingProposal: null
+      };
+    }
+
     switch (planned.kind) {
       case "reply":
       case "clarify":
@@ -210,60 +193,6 @@ export class ShellConversationAgent {
           },
           nextPendingProposal: null
         };
-      case "help":
-        return {
-          response: {
-            kind: "execute",
-            action: { kind: "help" },
-            source: "planner"
-          },
-          nextPendingProposal: null
-        };
-      case "pet":
-        return {
-          response: {
-            kind: "execute",
-            action: { kind: "pet" },
-            source: "planner"
-          },
-          nextPendingProposal: null
-        };
-      case "stats":
-        return {
-          response: {
-            kind: "execute",
-            action: { kind: "stats" },
-            source: "planner"
-          },
-          nextPendingProposal: null
-        };
-      case "rescue":
-        return {
-          response: {
-            kind: "execute",
-            action: { kind: "rescue" },
-            source: "planner"
-          },
-          nextPendingProposal: null
-        };
-      case "review-session":
-        return {
-          response: {
-            kind: "execute",
-            action: { kind: "review-session" },
-            source: "planner"
-          },
-          nextPendingProposal: null
-        };
-      case "quit":
-        return {
-          response: {
-            kind: "execute",
-            action: { kind: "quit" },
-            source: "planner"
-          },
-          nextPendingProposal: null
-        };
       case "ask":
         return {
           response: {
@@ -299,17 +228,7 @@ export class ShellConversationAgent {
         };
       }
     }
+
+    throw new ConfigurationError("Shell planner returned an unhandled decision.");
   }
-}
-
-export function serializePendingShellProposal(
-  proposal: PendingShellProposal
-): string {
-  return JSON.stringify(proposal);
-}
-
-export function deserializePendingShellProposal(
-  payloadJson: string
-): PendingShellProposal {
-  return JSON.parse(payloadJson) as PendingShellProposal;
 }

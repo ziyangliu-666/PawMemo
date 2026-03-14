@@ -12,6 +12,30 @@ import type {
 import { ExplanationContextBuilder } from "./context-builder";
 import type { SqliteDatabase } from "../../storage/sqlite/database";
 
+function toExplanationPayload(
+  payload: Record<string, unknown>
+): ExplanationPayload {
+  const highlights = payload.highlights;
+
+  return {
+    gloss: typeof payload.gloss === "string" ? payload.gloss : undefined,
+    explanation:
+      typeof payload.explanation === "string" ? payload.explanation : undefined,
+    usage_note:
+      typeof payload.usage_note === "string" ? payload.usage_note : undefined,
+    example: typeof payload.example === "string" ? payload.example : undefined,
+    highlights:
+      typeof highlights === "string" ||
+      (Array.isArray(highlights) && highlights.every((item) => typeof item === "string"))
+        ? highlights
+        : undefined,
+    confidence_note:
+      typeof payload.confidence_note === "string"
+        ? payload.confidence_note
+        : undefined
+  };
+}
+
 export class ExplanationEngine {
   private readonly contextBuilder: ExplanationContextBuilder;
 
@@ -45,7 +69,7 @@ export class ExplanationEngine {
       responseMimeType: "application/json",
       temperature: 0.2
     });
-    const payload = parseStructuredJson<ExplanationPayload>(response.text);
+    const payload = parseStructuredJson(response.text, toExplanationPayload);
 
     return normalizeExplanationOutput(context, payload);
   }

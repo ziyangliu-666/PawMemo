@@ -12,6 +12,21 @@ import type {
 } from "./types";
 import { CardAuthorContextBuilder } from "./context-builder";
 
+function toCardAuthorPayload(payload: Record<string, unknown>): CardAuthorPayload {
+  return {
+    status: typeof payload.status === "string" ? payload.status : undefined,
+    reason: typeof payload.reason === "string" ? payload.reason : undefined,
+    normalized_context:
+      typeof payload.normalized_context === "string"
+        ? payload.normalized_context
+        : undefined,
+    cloze_context:
+      typeof payload.cloze_context === "string"
+        ? payload.cloze_context
+        : undefined
+  };
+}
+
 export class CardAuthorEngine {
   private readonly contextBuilder: CardAuthorContextBuilder;
 
@@ -43,7 +58,7 @@ export class CardAuthorEngine {
       responseMimeType: "application/json",
       temperature: 0.1
     });
-    const payload = parseStructuredJson<CardAuthorPayload>(response.text);
+    const payload = parseStructuredJson(response.text, toCardAuthorPayload);
 
     return normalizeCardAuthorOutput(context, payload);
   }

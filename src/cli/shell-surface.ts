@@ -2,13 +2,38 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { StringDecoder } from "node:string_decoder";
 
+import {
+  BaseShellSurface,
+  resolveHighlightLength,
+  splitSweepingHighlight,
+  WAITING_FRAMES,
+  type ShellTerminal
+} from "./base-shell-surface";
+import {
+  clampToNearestGraphemeBoundary,
+  composerDisplayText,
+  nextGraphemeBoundary,
+  normalizePastedText,
+  previousGraphemeBoundary,
+  splitGraphemes,
+  stringDisplayWidth,
+  takeLeadingInputToken,
+  visibleDisplayWidth
+} from "../lib/text-display";
+import {
+  centerDisplayLine,
+  fitComposerViewport,
+  fitDisplayLine,
+  tailDisplayText,
+  wrapDisplayText,
+  wrapDisplayTextWithPrefixes
+} from "../lib/text-wrap";
 import type { CliDataKind } from "./theme";
 import { createCliTheme, shouldUseColor } from "./theme";
 import {
   formatPromptSelectionPrompt,
   resolvePromptSelection,
-  type PromptSelectionRequest,
-  type ReviewSessionTerminal
+  type PromptSelectionRequest
 } from "./review-session-runner";
 import { flattenStudyCardIntent } from "./study-card-view";
 import type { StudyCardSection, StudyCellIntent } from "./transcript-intent";
@@ -17,12 +42,7 @@ import {
   type ShellStudyCellPayload,
   type ShellTranscriptCell
 } from "./shell-transcript";
-
-const SHELL_STREAM_DELAY_MS = 8;
-const SHELL_WAIT_FRAME_MS = 100;
-const SHELL_WAIT_HIGHLIGHT_STEP = 4;
 const DEFAULT_SHELL_PROMPT = "› ";
-const WAITING_FRAMES = ["·", "•", "●", "•"];
 const ANSI_CLEAR_LINE = "\r\u001b[2K";
 const ANSI_CLEAR_SCREEN = "\u001b[2J\u001b[H";
 const ANSI_HOME = "\u001b[H";
@@ -30,12 +50,11 @@ const ANSI_ALT_SCREEN_ON = "\u001b[?1049h";
 const ANSI_ALT_SCREEN_OFF = "\u001b[?1049l";
 const ANSI_HIDE_CURSOR = "\u001b[?25l";
 const ANSI_SHOW_CURSOR = "\u001b[?25h";
+const ANSI_ESCAPE = String.fromCharCode(27);
 const ANSI_MOUSE_TRACKING_ON = "";
 const ANSI_MOUSE_TRACKING_OFF = "";
 const DEFAULT_TUI_COLUMNS = 80;
 const DEFAULT_TUI_ROWS = 24;
-const ANSI_ESCAPE = String.fromCharCode(27);
-const ANSI_REGEX = new RegExp(`${ANSI_ESCAPE}\\[[0-9;]*m`, "g");
 const MAX_VISIBLE_SELECTION_CHOICES = 8;
 const BRACKETED_PASTE_START = "\u001b[200~";
 const BRACKETED_PASTE_END = "\u001b[201~";
@@ -83,15 +102,6 @@ interface TuiShellSurfaceOptions {
   debug?: boolean;
 }
 
-export interface ShellStreamHighlightConfig {
-  percent: number;
-  totalChars: number;
-}
-
-export interface ShellTerminal extends ReviewSessionTerminal {
-  writeRaw?(text: string): void;
-}
-
 export class ReadlineShellTerminal implements ShellTerminal {
   readonly supportsColor = shouldUseColor(output);
 
@@ -125,467 +135,23 @@ export class ReadlineShellTerminal implements ShellTerminal {
   }
 }
 
-export interface ShellSurface {
-  readonly supportsColor?: boolean;
-  beginShell(displayName: string): void;
-  close(): Promise<void> | void;
-  prompt(): Promise<string>;
-  seedTranscript?(entries: ShellSurfaceEntryInput[]): void;
-  renderCompanionCard(text: string): void;
-  renderCompanionLine(text: string): void;
-  showWaitingIndicator(label: string, text: string): void;
-  clearWaitingIndicator(): void;
-  beginAssistantReplyStream(): void;
-  appendAssistantReplyDelta(delta: string): void;
-  finishAssistantReplyStream(commit: boolean): void;
-  writeAssistantReply(text: string, signal?: AbortSignal): Promise<void>;
-  writeAssistantReplyNow(text: string): void;
-  writeAlert(text: string): void;
-  showInterruptHint?(text: string): void;
-  clearInterruptHint?(): void;
-  writeHelp(text: string): void;
-  writeDataBlock(
-    text: string,
-    kind?: CliDataKind,
-    study?: StudyCellIntent
-  ): void;
-  createReviewSessionTerminal(): ReviewSessionTerminal;
-  setMode?(mode: string, dueCount?: number): void;
-  setStreamHighlight?(config: ShellStreamHighlightConfig | null): void;
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  if (!signal?.aborted) {
-    return;
-  }
-
-  if (signal.reason instanceof Error) {
-    throw signal.reason;
-  }
-
-  throw new DOMException("The operation was aborted.", "AbortError");
-}
-
-function codePointWidth(codePoint: number): number {
-  if (
-    codePoint === 0 ||
-    codePoint === 0x200d ||
-    (codePoint >= 0x300 && codePoint <= 0x36f) ||
-    (codePoint >= 0x1ab0 && codePoint <= 0x1aff) ||
-    (codePoint >= 0x1dc0 && codePoint <= 0x1dff) ||
-    (codePoint >= 0x20d0 && codePoint <= 0x20ff) ||
-    (codePoint >= 0xfe20 && codePoint <= 0xfe2f)
-  ) {
-    return 0;
-  }
-
-  if (
-    codePoint >= 0x1100 &&
-    (
-      codePoint <= 0x115f ||
-      codePoint === 0x2329 ||
-      codePoint === 0x232a ||
-      (codePoint >= 0x2e80 && codePoint <= 0xa4cf && codePoint !== 0x303f) ||
-      (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
-      (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
-      (codePoint >= 0xfe10 && codePoint <= 0xfe19) ||
-      (codePoint >= 0xfe30 && codePoint <= 0xfe6f) ||
-      (codePoint >= 0xff00 && codePoint <= 0xff60) ||
-      (codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
-      (codePoint >= 0x1f300 && codePoint <= 0x1f64f) ||
-      (codePoint >= 0x1f900 && codePoint <= 0x1f9ff) ||
-      (codePoint >= 0x20000 && codePoint <= 0x3fffd)
-    )
-  ) {
-    return 2;
-  }
-
-  return 1;
-}
-
-function stringDisplayWidth(text: string): number {
-  let width = 0;
-
-  for (const char of text) {
-    width += codePointWidth(char.codePointAt(0) ?? 0);
-  }
-
-  return width;
-}
-
-const graphemeSegmenter = new Intl.Segmenter(undefined, {
-  granularity: "grapheme"
-});
-
-function splitGraphemes(text: string): string[] {
-  return Array.from(
-    graphemeSegmenter.segment(text),
-    (entry) => entry.segment
-  );
-}
-
-function firstGrapheme(text: string): string {
-  return splitGraphemes(text)[0] ?? "";
-}
-
-function graphemeBoundaries(text: string): number[] {
-  const boundaries = [0];
-
-  for (const entry of graphemeSegmenter.segment(text)) {
-    const end = entry.index + entry.segment.length;
-    if (end > boundaries[boundaries.length - 1]) {
-      boundaries.push(end);
-    }
-  }
-
-  if (boundaries[boundaries.length - 1] !== text.length) {
-    boundaries.push(text.length);
-  }
-
-  return boundaries;
-}
-
-function clampToNearestGraphemeBoundary(text: string, cursor: number): number {
-  const target = Math.max(0, Math.min(cursor, text.length));
-  const boundaries = graphemeBoundaries(text);
-  let best = boundaries[0] ?? 0;
-  let bestDistance = Math.abs(best - target);
-
-  for (const boundary of boundaries) {
-    const distance = Math.abs(boundary - target);
-    if (distance < bestDistance) {
-      best = boundary;
-      bestDistance = distance;
-    }
-  }
-
-  return best;
-}
-
-function previousGraphemeBoundary(text: string, cursor: number): number {
-  const target = clampToNearestGraphemeBoundary(text, cursor);
-  const boundaries = graphemeBoundaries(text);
-
-  for (let index = boundaries.length - 1; index >= 0; index -= 1) {
-    const boundary = boundaries[index];
-    if (boundary !== undefined && boundary < target) {
-      return boundary;
-    }
-  }
-
-  return 0;
-}
-
-function nextGraphemeBoundary(text: string, cursor: number): number {
-  const target = clampToNearestGraphemeBoundary(text, cursor);
-  const boundaries = graphemeBoundaries(text);
-
-  for (const boundary of boundaries) {
-    if (boundary > target) {
-      return boundary;
-    }
-  }
-
-  return text.length;
-}
-
-function takeLeadingInputToken(buffer: string): string {
-  if (buffer.length === 0) {
-    return "";
-  }
-
-  const codePoint = buffer.codePointAt(0) ?? 0;
-  if (codePoint < 0x20 || codePoint === 0x7f) {
-    return String.fromCodePoint(codePoint);
-  }
-
-  return firstGrapheme(buffer);
-}
-
-function normalizePastedText(text: string): string {
-  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
-
-function composerDisplayText(text: string): string {
-  return text.replace(/\t/g, "  ").replace(/\n/g, "⏎");
-}
-
 function formatCursorPosition(row: number, column: number): string {
   return `\u001b[${row + 1};${column + 1}H`;
 }
+export type {
+  ShellStreamHighlightConfig,
+  ShellSurface,
+  ShellTerminal
+} from "./base-shell-surface";
 
-function fitComposerViewport(
-  before: string,
-  after: string,
-  maxWidth: number
-): {
-  before: string;
-  after: string;
-} {
-  const beforeParts = splitGraphemes(before);
-  const afterParts = splitGraphemes(after);
-  let trimmedStart = false;
-  let trimmedEnd = false;
-
-  const currentWidth = () =>
-    stringDisplayWidth(beforeParts.join("")) +
-    stringDisplayWidth(afterParts.join("")) +
-    (trimmedStart ? 1 : 0) +
-    (trimmedEnd ? 1 : 0);
-
-  while (currentWidth() > maxWidth) {
-    if (beforeParts.length > 0) {
-      beforeParts.shift();
-      trimmedStart = true;
-      continue;
-    }
-
-    if (afterParts.length > 0) {
-      afterParts.pop();
-      trimmedEnd = true;
-      continue;
-    }
-
-    break;
-  }
-
-  return {
-    before: `${trimmedStart ? "…" : ""}${beforeParts.join("")}`,
-    after: `${afterParts.join("")}${trimmedEnd ? "…" : ""}`
-  };
-}
-
-function visibleDisplayWidth(text: string): number {
-  return stringDisplayWidth(text.replace(ANSI_REGEX, ""));
-}
-
-function wrapDisplayText(text: string, maxWidth: number): string[] {
-  const normalized = text.replace(/\t/g, "  ");
-
-  if (maxWidth <= 0) {
-    return [normalized];
-  }
-
-  if (normalized.trim().length === 0) {
-    return [""];
-  }
-
-  const words = normalized.split(" ");
-  const lines: string[] = [];
-  let current = "";
-
-  for (const word of words) {
-    const candidate = current.length === 0 ? word : `${current} ${word}`;
-
-    if (stringDisplayWidth(candidate) <= maxWidth) {
-      current = candidate;
-      continue;
-    }
-
-    if (current.length > 0) {
-      lines.push(current);
-      current = word;
-      continue;
-    }
-
-    let chunk = "";
-    for (const char of splitGraphemes(word)) {
-      const chunkCandidate = `${chunk}${char}`;
-      if (stringDisplayWidth(chunkCandidate) <= maxWidth) {
-        chunk = chunkCandidate;
-      } else {
-        if (chunk.length > 0) {
-          lines.push(chunk);
-        }
-        chunk = char;
-      }
-    }
-    current = chunk;
-  }
-
-  if (current.length > 0) {
-    lines.push(current);
-  }
-
-  return lines.length > 0 ? lines : [normalized];
-}
-
-function wrapDisplayTextWithPrefixes(
-  text: string,
-  firstLineWidth: number,
-  continuationWidth: number
-): string[] {
-  const normalized = text.replace(/\t/g, "  ");
-
-  if (firstLineWidth <= 0 || continuationWidth <= 0) {
-    return [normalized];
-  }
-
-  if (normalized.trim().length === 0) {
-    return [""];
-  }
-
-  const lines: string[] = [];
-
-  const cutFittingPrefix = (value: string, maxWidth: number): string => {
-    let chunk = "";
-
-    for (const char of splitGraphemes(value)) {
-      const candidate = `${chunk}${char}`;
-      if (stringDisplayWidth(candidate) > maxWidth) {
-        break;
-      }
-      chunk = candidate;
-    }
-
-    return chunk;
-  };
-
-  const wrapLogicalLine = (
-    sourceLine: string,
-    startingWidth: number
-  ): string[] => {
-    if (sourceLine.length === 0) {
-      return [""];
-    }
-
-    const output: string[] = [];
-    const tokens = sourceLine.match(/\S+|\s+/g) ?? [sourceLine];
-    let current = "";
-    let currentWidth = startingWidth;
-
-    for (const token of tokens) {
-      if (/^\s+$/.test(token)) {
-        if (current.length === 0) {
-          continue;
-        }
-
-        const candidate = `${current}${token}`;
-        if (stringDisplayWidth(candidate) <= currentWidth) {
-          current = candidate;
-          continue;
-        }
-
-        output.push(current.trimEnd());
-        current = "";
-        currentWidth = continuationWidth;
-        continue;
-      }
-
-      let remaining = token;
-
-      while (remaining.length > 0) {
-        const candidate = `${current}${remaining}`;
-        if (stringDisplayWidth(candidate) <= currentWidth) {
-          current = candidate;
-          remaining = "";
-          continue;
-        }
-
-        if (current.length > 0) {
-          output.push(current.trimEnd());
-          current = "";
-          currentWidth = continuationWidth;
-          continue;
-        }
-
-        const chunk = cutFittingPrefix(remaining, currentWidth);
-        if (chunk.length === 0) {
-          break;
-        }
-        output.push(chunk);
-        remaining = remaining.slice(chunk.length);
-        currentWidth = continuationWidth;
-      }
-    }
-
-    if (current.length > 0) {
-      output.push(current.trimEnd());
-    }
-
-    return output.length > 0 ? output : [""];
-  };
-
-  let currentWidth = firstLineWidth;
-
-  normalized.split("\n").forEach((sourceLine) => {
-    const wrapped = wrapLogicalLine(sourceLine, currentWidth);
-    lines.push(...wrapped);
-    currentWidth = continuationWidth;
-  });
-
-  return lines.length > 0 ? lines : [normalized];
-}
-
-function resolveHighlightLength(
-  textLength: number,
-  config?: ShellStreamHighlightConfig | null
-): number {
-  if (textLength <= 0) {
-    return 0;
-  }
-
-  if (!config) {
-    return Math.min(
-      6,
-      Math.max(2, Math.floor(textLength / 4))
-    );
-  }
-
-  const configuredLength = Math.round((config.totalChars * config.percent) / 100);
-  return Math.min(
-    textLength,
-    Math.max(1, configuredLength)
-  );
-}
-
-function splitSweepingHighlight(
-  text: string,
-  tick: number,
-  config?: ShellStreamHighlightConfig | null
-): {
-  before: string;
-  active: string;
-  after: string;
-} {
-  const chars = splitGraphemes(text);
-
-  if (chars.length === 0) {
-    return {
-      before: "",
-      active: "",
-      after: ""
-    };
-  }
-
-  const highlightLength = resolveHighlightLength(chars.length, config);
-  const maxStart = Math.max(0, chars.length - highlightLength);
-  const start = maxStart === 0 ? 0 : tick % (maxStart + 1);
-  const end = Math.min(chars.length, start + highlightLength);
-
-  return {
-    before: chars.slice(0, start).join(""),
-    active: chars.slice(start, end).join(""),
-    after: chars.slice(end).join("")
-  };
-}
-
-export class LineShellSurface implements ShellSurface {
-  readonly supportsColor?: boolean;
-
+export class LineShellSurface extends BaseShellSurface {
   private readonly theme: ReturnType<typeof createCliTheme>;
-  private streamHighlight: ShellStreamHighlightConfig | null = null;
-  private waitingFrame = 0;
-  private waitingHighlightStep = 0;
-  private waitingText: string | null = null;
-  private waitingLabel: string | null = null;
-  private waitingTimer: NodeJS.Timeout | null = null;
   private streamedAssistantBuffer = "";
   private streamedAssistantActive = false;
   private streamedAssistantPrefixWritten = false;
 
-  constructor(private readonly terminal: ShellTerminal) {
-    this.supportsColor = terminal.supportsColor;
+  constructor(terminal: ShellTerminal) {
+    super(terminal);
     this.theme = createCliTheme({
       enabled: terminal.supportsColor ?? false
     });
@@ -593,15 +159,6 @@ export class LineShellSurface implements ShellSurface {
 
   beginShell(displayName: string): void {
     this.terminal.write(this.theme.heading(`${displayName} · Chat`));
-  }
-
-  setStreamHighlight(config: ShellStreamHighlightConfig | null): void {
-    this.streamHighlight = config;
-  }
-
-  setMode(mode: string, dueCount?: number): void {
-    void mode;
-    void dueCount;
   }
 
   prompt(): Promise<string> {
@@ -614,52 +171,6 @@ export class LineShellSurface implements ShellSurface {
 
   renderCompanionLine(text: string): void {
     this.terminal.write(this.theme.companionLine(text));
-  }
-
-  showWaitingIndicator(label: string, text: string): void {
-    const trimmed = text.trim();
-
-    if (trimmed.length === 0) {
-      return;
-    }
-
-    this.waitingLabel = label;
-    this.waitingText = trimmed;
-    this.waitingFrame = 0;
-    this.waitingHighlightStep = 0;
-
-    if (!this.terminal.writeRaw) {
-      this.terminal.write(this.formatWaitingLine());
-      return;
-    }
-
-    this.renderWaitingFrame();
-
-    if (this.waitingTimer) {
-      clearInterval(this.waitingTimer);
-    }
-
-    this.waitingTimer = setInterval(() => {
-      this.waitingFrame = (this.waitingFrame + 1) % WAITING_FRAMES.length;
-      this.waitingHighlightStep += SHELL_WAIT_HIGHLIGHT_STEP;
-      this.renderWaitingFrame();
-    }, SHELL_WAIT_FRAME_MS);
-  }
-
-  clearWaitingIndicator(): void {
-    if (this.waitingTimer) {
-      clearInterval(this.waitingTimer);
-      this.waitingTimer = null;
-    }
-
-    if (this.waitingText !== null && this.terminal.writeRaw) {
-      this.terminal.writeRaw(ANSI_CLEAR_LINE);
-    }
-
-    this.waitingText = null;
-    this.waitingLabel = null;
-    this.waitingFrame = 0;
-    this.waitingHighlightStep = 0;
   }
 
   beginAssistantReplyStream(): void {
@@ -711,40 +222,6 @@ export class LineShellSurface implements ShellSurface {
     this.streamedAssistantPrefixWritten = false;
   }
 
-  async writeAssistantReply(text: string, signal?: AbortSignal): Promise<void> {
-    const trimmed = text.trim();
-
-    if (trimmed.length === 0) {
-      return;
-    }
-
-    this.clearWaitingIndicator();
-
-    if (!this.terminal.writeRaw) {
-      this.writeAssistantReplyNow(trimmed);
-      return;
-    }
-
-    this.beginAssistantReplyStream();
-    try {
-      const tokens = /\s/.test(trimmed)
-        ? trimmed.match(/\S+\s*/g) ?? [trimmed]
-        : [...trimmed];
-
-      for (const token of tokens) {
-        throwIfAborted(signal);
-        this.appendAssistantReplyDelta(token);
-        await new Promise((resolve) => setTimeout(resolve, SHELL_STREAM_DELAY_MS));
-      }
-
-      throwIfAborted(signal);
-      this.finishAssistantReplyStream(true);
-    } catch (error) {
-      this.finishAssistantReplyStream(false);
-      throw error;
-    }
-  }
-
   writeAssistantReplyNow(text: string): void {
     this.clearWaitingIndicator();
     this.terminal.write(this.formatAssistantReply(text));
@@ -793,40 +270,9 @@ export class LineShellSurface implements ShellSurface {
     return `${this.formatAssistantPrefix()}${this.theme.assistantLine(text)}`;
   }
 
-  createReviewSessionTerminal(): ReviewSessionTerminal {
-    return {
-      supportsColor: this.supportsColor,
-      setMode: (mode: string) => this.setMode(mode),
-      write: (text: string) => {
-        this.terminal.write(text);
-      },
-      writeDataBlock: (
-        text: string,
-        kind: CliDataKind,
-        study?: StudyCellIntent
-      ) => {
-        this.writeDataBlock(text, kind, study);
-      },
-      select: (request: PromptSelectionRequest) =>
-        this.terminal.prompt(this.theme.prompt(formatPromptSelectionPrompt(request))),
-      prompt: (promptText: string) => this.terminal.prompt(promptText),
-      close: () => {}
-    };
-  }
-
   close(): Promise<void> | void {
     this.clearWaitingIndicator();
     return this.terminal.close();
-  }
-
-  private renderWaitingFrame(): void {
-    if (!this.terminal.writeRaw || this.waitingText === null) {
-      return;
-    }
-
-    this.terminal.writeRaw(
-      `${ANSI_CLEAR_LINE}${this.formatWaitingLine()}`
-    );
   }
 
   private formatWaitingLine(): string {
@@ -836,6 +282,7 @@ export class LineShellSurface implements ShellSurface {
     const { before, active, after } = splitSweepingHighlight(
       waitingText,
       this.waitingHighlightStep,
+      splitGraphemes,
       this.streamHighlight
     );
 
@@ -845,6 +292,46 @@ export class LineShellSurface implements ShellSurface {
       this.theme.status(after)
     ].join("");
   }
+
+  protected shouldStreamAssistantReply(): boolean {
+    return typeof this.terminal.writeRaw === "function";
+  }
+
+  protected canAnimateWaitingIndicator(): boolean {
+    return typeof this.terminal.writeRaw === "function";
+  }
+
+  protected createReviewSessionPromptSelect():
+    | ((request: PromptSelectionRequest) => Promise<string>)
+    | undefined {
+    return (request: PromptSelectionRequest) =>
+      this.terminal.prompt(this.theme.prompt(formatPromptSelectionPrompt(request)));
+  }
+
+  protected renderWaitingIndicator(): void {
+    if (!this.terminal.writeRaw) {
+      this.terminal.write(this.formatWaitingLine());
+      return;
+    }
+
+    this.terminal.writeRaw(`${ANSI_CLEAR_LINE}${this.formatWaitingLine()}`);
+  }
+
+  protected beforeClearWaitingIndicator(): void {
+    if (this.waitingText !== null && this.terminal.writeRaw) {
+      this.terminal.writeRaw(ANSI_CLEAR_LINE);
+    }
+  }
+
+  protected writeReviewSessionLine(text: string): void {
+    this.terminal.write(text);
+  }
+
+  protected promptWithLabel(promptText: string): Promise<string> {
+    return this.terminal.prompt(promptText);
+  }
+
+  protected renderFrame(): void {}
 }
 
 const KNOWN_COMMANDS = [
@@ -861,19 +348,10 @@ const KNOWN_COMMANDS = [
   { name: "/quit", description: "leave the shell" }
 ];
 
-export class TuiShellSurface implements ShellSurface {
-  readonly supportsColor?: boolean;
-
+export class TuiShellSurface extends BaseShellSurface {
   private readonly theme: ReturnType<typeof createCliTheme>;
   private readonly transcript = new ShellTranscriptModel();
   private readonly debugEnabled: boolean;
-  private streamHighlight: ShellStreamHighlightConfig | null = null;
-  private waitingFrame = 0;
-  private waitingHighlightStep = 0;
-  private waitingLabel: string | null = null;
-  private waitingText: string | null = null;
-  private waitingSince: number | null = null;
-  private waitingTimer: NodeJS.Timeout | null = null;
   private activePromptLabel = DEFAULT_SHELL_PROMPT;
   private interruptHint: string | null = null;
   private composerBuffer = "";
@@ -904,19 +382,14 @@ export class TuiShellSurface implements ShellSurface {
   }
 
   constructor(
-    private readonly terminal: ShellTerminal,
+    terminal: ShellTerminal,
     options: TuiShellSurfaceOptions = {}
   ) {
-    this.supportsColor = terminal.supportsColor;
+    super(terminal);
     this.debugEnabled = options.debug ?? false;
     this.theme = createCliTheme({
       enabled: terminal.supportsColor ?? false
     });
-  }
-
-  setStreamHighlight(config: ShellStreamHighlightConfig | null): void {
-    this.streamHighlight = config;
-    this.renderFrame();
   }
 
   showInterruptHint(text: string): void {
@@ -1345,44 +818,6 @@ export class TuiShellSurface implements ShellSurface {
     this.renderFrame();
   }
 
-  showWaitingIndicator(label: string, text: string): void {
-    if (text.trim().length === 0) {
-      return;
-    }
-
-    this.waitingLabel = label;
-    this.waitingText = text.trim();
-    this.waitingSince = Date.now();
-    this.waitingFrame = 0;
-    this.waitingHighlightStep = 0;
-    this.renderFrame();
-
-    if (this.waitingTimer) {
-      clearInterval(this.waitingTimer);
-    }
-
-    this.waitingTimer = setInterval(() => {
-      this.waitingFrame = (this.waitingFrame + 1) % WAITING_FRAMES.length;
-      this.waitingHighlightStep += SHELL_WAIT_HIGHLIGHT_STEP;
-      this.renderFrame();
-    }, SHELL_WAIT_FRAME_MS);
-  }
-
-  clearWaitingIndicator(): void {
-    if (this.waitingTimer) {
-      clearInterval(this.waitingTimer);
-      this.waitingTimer = null;
-    }
-    if (this.waitingLabel !== null || this.waitingText !== null) {
-      this.waitingLabel = null;
-      this.waitingText = null;
-      this.waitingSince = null;
-      this.waitingFrame = 0;
-      this.waitingHighlightStep = 0;
-      this.renderFrame();
-    }
-  }
-
   beginAssistantReplyStream(): void {
     this.clearWaitingIndicator();
     this.transcript.beginActiveAssistantCell();
@@ -1407,34 +842,6 @@ export class TuiShellSurface implements ShellSurface {
     }
 
     this.renderFrame();
-  }
-
-  async writeAssistantReply(text: string, signal?: AbortSignal): Promise<void> {
-    const trimmed = text.trim();
-
-    if (trimmed.length === 0) {
-      return;
-    }
-
-    this.beginAssistantReplyStream();
-
-    try {
-      const tokens = /\s/.test(trimmed)
-        ? trimmed.match(/\S+\s*/g) ?? [trimmed]
-        : [...trimmed];
-
-      for (const token of tokens) {
-        throwIfAborted(signal);
-        this.appendAssistantReplyDelta(token);
-        await new Promise((resolve) => setTimeout(resolve, SHELL_STREAM_DELAY_MS));
-      }
-
-      throwIfAborted(signal);
-      this.finishAssistantReplyStream(true);
-    } catch (error) {
-      this.finishAssistantReplyStream(false);
-      throw error;
-    }
   }
 
   writeAssistantReplyNow(text: string): void {
@@ -1466,30 +873,6 @@ export class TuiShellSurface implements ShellSurface {
     });
   }
 
-  createReviewSessionTerminal(): ReviewSessionTerminal {
-    return {
-      supportsColor: this.supportsColor,
-      setMode: (mode: string) => this.setMode(mode),
-      write: (text: string) => {
-        this.appendEntry({
-          kind: "data",
-          text,
-          dataKind: "plain"
-        });
-      },
-      writeDataBlock: (
-        text: string,
-        kind: CliDataKind,
-        study?: StudyCellIntent
-      ) => {
-        this.writeDataBlock(text, kind, study);
-      },
-      select: (request: PromptSelectionRequest) => this.promptWithSelection(request),
-      prompt: (promptText: string) => this.promptWithLabel(promptText),
-      close: () => {}
-    };
-  }
-
   close(): Promise<void> | void {
     this.clearWaitingIndicator();
     this.exitConfirmPending = false;
@@ -1512,6 +895,20 @@ export class TuiShellSurface implements ShellSurface {
     return this.terminal.close();
   }
 
+  protected createReviewSessionPromptSelect():
+    | ((request: PromptSelectionRequest) => Promise<string>)
+    | undefined {
+    return (request: PromptSelectionRequest) => this.promptWithSelection(request);
+  }
+
+  protected writeReviewSessionLine(text: string): void {
+    this.appendEntry({
+      kind: "data",
+      text,
+      dataKind: "plain"
+    });
+  }
+
   private appendEntry(entry: ShellSurfaceEntryInput): void {
     this.transcript.appendCommittedCell(
       entry.kind,
@@ -1523,7 +920,7 @@ export class TuiShellSurface implements ShellSurface {
     this.renderFrame();
   }
 
-  private async promptWithLabel(promptText: string): Promise<string> {
+  protected async promptWithLabel(promptText: string): Promise<string> {
     this.activePromptLabel = promptText;
     this.composerCursor = clampToNearestGraphemeBoundary(
       this.composerBuffer,
@@ -1800,7 +1197,7 @@ export class TuiShellSurface implements ShellSurface {
     this.renderFrame();
   }
 
-  private renderFrame(): void {
+  protected renderFrame(): void {
     if (!this.terminal.writeRaw || !this.active) {
       return;
     }
@@ -1939,10 +1336,10 @@ export class TuiShellSurface implements ShellSurface {
   private renderLandingHero(columns: number): string[] {
     return [
       this.theme.heading(
-        this.centerDisplayLine(`✦ ${this.displayName}'s Study Nook ✦`, columns)
+        centerDisplayLine(`✦ ${this.displayName}'s Study Nook ✦`, columns)
       ),
       this.theme.status(
-        this.centerDisplayLine(
+        centerDisplayLine(
           `Save one word, ask one question, and let ${this.displayName} keep it warm.`,
           columns
         )
@@ -2074,13 +1471,14 @@ export class TuiShellSurface implements ShellSurface {
 
     const frame = WAITING_FRAMES[this.waitingFrame] ?? "•";
     const prefix = `${frame} ${this.waitingLabel ?? "PawMemo"}  `;
-    const fittedWaitingText = this.fitLine(
+    const fittedWaitingText = fitDisplayLine(
       this.waitingText,
       Math.max(1, columns - visibleDisplayWidth(prefix))
     );
     const { before, active, after } = splitSweepingHighlight(
       fittedWaitingText,
       this.waitingHighlightStep,
+      splitGraphemes,
       this.streamHighlight
     );
 
@@ -2528,59 +1926,21 @@ export class TuiShellSurface implements ShellSurface {
   }
 
   private tailDisplayText(text: string, maxWidth: number): string {
-    if (stringDisplayWidth(text) <= maxWidth) {
-      return text;
-    }
-
-    let out = "";
-    const reversed = splitGraphemes(text).reverse();
-
-    for (const char of reversed) {
-      const candidate = `${char}${out}`;
-      if (stringDisplayWidth(candidate) > maxWidth - 1) {
-        break;
-      }
-      out = candidate;
-    }
-
-    return `…${out}`;
+    return tailDisplayText(text, maxWidth);
   }
 
 
 
   private fitLine(text: string, columns: number): string {
-    if (stringDisplayWidth(text) <= columns) {
-      return text;
-    }
-
-    let out = "";
-    for (const char of splitGraphemes(text)) {
-      const candidate = `${out}${char}`;
-      if (stringDisplayWidth(`${candidate}…`) > columns) {
-        break;
-      }
-      out = candidate;
-    }
-
-    return `${out}…`;
+    return fitDisplayLine(text, columns);
   }
 
   private centerDisplayLine(text: string, columns: number): string {
-    const fitted = this.fitLine(text, columns);
-    const missingWidth = Math.max(0, columns - stringDisplayWidth(fitted));
-    const leftPadding = Math.floor(missingWidth / 2);
-    const rightPadding = missingWidth - leftPadding;
-
-    return `${" ".repeat(leftPadding)}${fitted}${" ".repeat(rightPadding)}`;
+    return centerDisplayLine(text, columns);
   }
 
   private centerStudyCardLine(text: string, width: number): string {
-    const fitted = this.fitLine(text, width);
-    const missingWidth = Math.max(0, width - stringDisplayWidth(fitted));
-    const leftPadding = Math.floor(missingWidth / 2);
-    const rightPadding = missingWidth - leftPadding;
-
-    return `${" ".repeat(leftPadding)}${fitted}${" ".repeat(rightPadding)}`;
+    return centerDisplayLine(text, width);
   }
 
   private previewDebugValue(value: string): string {

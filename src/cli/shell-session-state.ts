@@ -4,26 +4,11 @@ import {
   serializePendingShellProposal,
   type PendingShellProposal,
   type ShellAction,
-  type ShellAgentDecision
-} from "./shell-agent";
-
-export type ShellTurnSpeaker = "user" | "assistant";
-
-export type ShellTurnKind =
-  | "utterance"
-  | "message"
-  | "proposal"
-  | "action"
-  | "result"
-  | "error";
-
-export interface ShellPlannerTurn {
-  speaker: ShellTurnSpeaker;
-  kind: ShellTurnKind;
-  contentText: string;
-  createdAt: string;
-  payloadJson: string | null;
-}
+  type ShellAgentDecision,
+  type ShellPlannerTurn,
+  type ShellTurnKind,
+  type ShellTurnSpeaker
+} from "./shell-contract";
 
 function assertNever(value: never): never {
   throw new Error(`Unexpected shell action: ${JSON.stringify(value)}`);
@@ -110,9 +95,16 @@ export class ShellSessionState {
   }
 
   getPendingProposal(): PendingShellProposal | null {
-    return this.pendingProposalJson
-      ? deserializePendingShellProposal(this.pendingProposalJson)
-      : null;
+    if (!this.pendingProposalJson) {
+      return null;
+    }
+
+    try {
+      return deserializePendingShellProposal(this.pendingProposalJson);
+    } catch {
+      this.pendingProposalJson = null;
+      return null;
+    }
   }
 
   listRecentTurns(limit = 6): ShellPlannerTurn[] {
