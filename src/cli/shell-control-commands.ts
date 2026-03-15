@@ -3,6 +3,7 @@ import { UsageError } from "../lib/errors";
 import { getDefaultModelForProvider } from "../llm/provider-metadata";
 import type { ListLlmModelsResult } from "../llm/llm-config-service";
 import {
+  formatCompanionPacks,
   formatLlmModelList,
   formatLlmStatus
 } from "./format";
@@ -50,12 +51,7 @@ const SHELL_HELP_TEXT = [
   "  /highlight <percent> <total-chars>",
   "  /highlight off",
   "  /models [provider]",
-  "  /model",
-  "  /model show",
-  "  /model list [provider]",
-  "  /model use <provider> [model] [--api-key KEY] [--api-url URL]",
-  "  /model key <provider> <api-key>",
-  "  /model url <provider> <api-url>",
+  "  /packs",
   "  /quit | /exit"
 ].join("\n");
 
@@ -72,6 +68,9 @@ type ShellModelExecutor = Pick<
   | "setProviderApiKey"
   | "setProviderApiUrl"
   | "updateCurrentLlmSettings"
+  | "getActiveCompanionPackId"
+  | "listCompanionPacks"
+  | "setActiveCompanionPack"
 >;
 
 type ShellControlSessionState = Pick<ShellSessionState, "recordActionResult">;
@@ -104,11 +103,11 @@ export class ShellControlCommands {
       case "highlight":
         this.runHighlight(command);
         return true;
-      case "model":
-        await this.runModel(command);
-        return true;
       case "models":
         await this.runModels(command);
+        return true;
+      case "packs":
+        await this.runPacks();
         return true;
       default:
         return false;
@@ -120,6 +119,44 @@ export class ShellControlCommands {
     this.host.sessionState.recordActionResult(
       SHELL_HELP_TEXT,
       JSON.stringify({ type: "help" })
+    );
+  }
+
+
+  private async runPacks(): Promise<void> {
+    const packs = this.host.executor.listCompanionPacks();
+    if (packs.length === 0) {
+      this.host.writeDataBlock("No companion packs available.", "plain");
+      return;
+    }
+
+    const activeId = this.host.executor.getActiveCompanionPackId();
+    const selection = await this.host.readShellSelection({
+      promptText: "Pick a companion pack",
+      initialValue: activeId,
+      choices: packs.map((pack) => ({
+        value: pack.id,
+        label: `${pack.id} (${pack.displayName})`,
+        description: pack.archetype
+      }))
+    });
+
+    this.usePack(selection);
+  }
+
+  private usePack(packId: string): void {
+    const packs = this.host.executor.listCompanionPacks();
+    const pack = packs.find((p) => p.id === packId);
+
+    if (!pack) {
+      throw new UsageError(`Companion pack not found: ${packId}`);
+    }
+
+    this.host.executor.setActiveCompanionPack(packId);
+    this.host.writeAssistantReplyNow(`Pack switched to: ${packId} (${pack.displayName})`);
+    this.host.sessionState.recordActionResult(
+      `Companion pack switched to ${packId}`,
+      JSON.stringify({ type: "pack-set", packId })
     );
   }
 
@@ -178,125 +215,6 @@ export class ShellControlCommands {
     );
   }
 
-  private async runModel(command: ParsedCommand): Promise<void> {
-    const subcommand = command.args[0];
-
-    if (subcommand === undefined || subcommand === "show") {
-      this.writeLlmStatus("model-status");
-      return;
-    }
-
-    if (subcommand === "use" || subcommand === "set") {
-      const provider = asProviderName(command.args[1]);
-      const model = command.args[2];
-
-      if (!provider) {
-        throw new UsageError("`/model use` requires a provider name.");
-      }
-
-      this.host.executor.updateCurrentLlmSettings({
-        provider,
-        model,
-        apiKey: command.flags["api-key"] ?? undefined,
-        apiUrl: command.flags["api-url"] ?? undefined
-      });
-
-      this.writeLlmStatus("model-set", {
-        provider,
-        model: this.host.executor.getCurrentLlmSettings().model
-      });
-      return;
-    }
-
-    if (subcommand === "list") {
-      const provider = asProviderName(command.args[1] ?? command.flags.provider);
-      const result = await this.host.runWithStudyWait(
-        "model list",
-        {
-          provider: provider ?? "active"
-        },
-        () =>
-          this.host.executor.listModels({
-            provider,
-            apiKey: command.flags["api-key"],
-            apiUrl: command.flags["api-url"]
-          })
-      );
-      const formatted = formatLlmModelList(result);
-      this.host.writeDataBlock(formatted, "llm-model-list");
-      this.host.sessionState.recordActionResult(
-        formatted,
-        JSON.stringify({
-          type: "model-list",
-          provider: result.provider,
-          count: result.models.length
-        })
-      );
-      return;
-    }
-
-    if (subcommand === "url") {
-      const provider = asProviderName(command.args[1]);
-      const apiUrl = command.args[2] ?? command.flags["api-url"];
-
-      if (!provider) {
-        throw new UsageError("`/model url` requires a provider name.");
-      }
-
-      if (!apiUrl?.trim()) {
-        throw new UsageError("`/model url` requires an API URL value.");
-      }
-
-      this.host.executor.setProviderApiUrl(provider, apiUrl);
-      this.writeLlmStatus("model-url", { provider });
-      return;
-    }
-
-    if (subcommand === "key") {
-      const provider = asProviderName(command.args[1]);
-      const apiKey = command.args[2];
-
-      if (!provider) {
-        throw new UsageError("`/model key` requires a provider name.");
-      }
-
-      if (!apiKey?.trim()) {
-        throw new UsageError("`/model key` requires an API key value.");
-      }
-
-      this.host.executor.setProviderApiKey(provider, apiKey);
-      this.writeLlmStatus("model-key", { provider });
-      return;
-    }
-
-    const provider = asProviderName(subcommand);
-    const modelToken = command.args[1];
-
-    if (!provider) {
-      throw new UsageError(
-        [
-          "`/model` expects one of:",
-          "  `/model`",
-          "  `/model list [provider]`",
-          "  `/model use <provider> [model] [--api-key KEY] [--api-url URL]`",
-          "  `/model key <provider> <api-key>`",
-          "  `/model url <provider> <api-url>`"
-        ].join("\n")
-      );
-    }
-
-    this.host.executor.updateCurrentLlmSettings({
-      provider,
-      model: modelToken,
-      apiKey: command.flags["api-key"] ?? undefined,
-      apiUrl: command.flags["api-url"] ?? undefined
-    });
-
-    this.writeLlmStatus("model-set", {
-      provider,
-      model: this.host.executor.getCurrentLlmSettings().model
-    });
-  }
 
   private async runModels(command: ParsedCommand): Promise<void> {
     if (command.args.length > 1) {

@@ -1643,107 +1643,7 @@ test("ShellRunner shows planner setup guidance when no API key is configured", a
   }
 });
 
-test("ShellRunner can show model status and list models from slash commands", async () => {
-  const dbPath = tempDbPath("shell-model-list");
-  const db = openDatabase(dbPath);
-  const priorApiKey = process.env.GEMINI_API_KEY;
-  process.env.GEMINI_API_KEY = "test-key";
 
-  try {
-    const fakeProvider = new FakeGeminiProvider();
-    const terminal = new FakeShellTerminal(["/model", "/model list", "/quit"]);
-
-    const runner = new ShellRunner({
-      db,
-      terminal,
-      providerFactory: () => fakeProvider
-    });
-
-    await runner.run();
-
-    assert.ok(
-      terminal.writes.some((line) => line.includes("Current: gemini (gemini-2.5-flash)")),
-      "expected /model to show the active provider and model"
-    );
-    assert.ok(
-      terminal.writes.some((line) => line.includes("Models (gemini)")),
-      "expected /model list to print provider models"
-    );
-    assert.ok(
-      terminal.writes.some((line) => line.includes("gemini-2.5-pro")),
-      "expected /model list to include provider model ids"
-    );
-  } finally {
-    if (priorApiKey === undefined) {
-      delete process.env.GEMINI_API_KEY;
-    } else {
-      process.env.GEMINI_API_KEY = priorApiKey;
-    }
-
-    db.close();
-    fs.rmSync(dbPath, { force: true });
-  }
-});
-
-test("ShellRunner supports explicit /model use, key, and url commands", async () => {
-  const dbPath = tempDbPath("shell-model-switch");
-  const db = openDatabase(dbPath);
-
-  try {
-    const terminal = new FakeShellTerminal([
-      "/model use openai gpt-5-mini",
-      "/model key openai test-openai-key",
-      "/model url openai http://172.24.160.1:7861/v1/",
-      "/model use gemini",
-      "/quit"
-    ]);
-
-    const runner = new ShellRunner({
-      db,
-      terminal,
-      providerFactory: (name) => {
-        if (name !== "gemini") {
-          throw new Error("provider should not be called during /model status updates");
-        }
-
-        return new FakeGeminiProvider();
-      }
-    });
-
-    await runner.run();
-
-    const settings = db
-      .prepare(
-        `
-          SELECT key, value
-          FROM app_settings
-          WHERE key IN ('llm.provider', 'llm.model', 'llm.model.openai', 'llm.api_key.openai', 'llm.api_url.openai')
-          ORDER BY key ASC
-        `
-      )
-      .all() as Array<{ key: string; value: string }>;
-
-    assert.deepEqual(settings, [
-      { key: "llm.api_key.openai", value: "test-openai-key" },
-      { key: "llm.api_url.openai", value: "http://172.24.160.1:7861/v1" },
-      { key: "llm.model", value: "gemini-2.5-flash" },
-      { key: "llm.model.openai", value: "gpt-5-mini" },
-      { key: "llm.provider", value: "gemini" }
-    ]);
-    assert.ok(
-      terminal.writes.some(
-        (line) =>
-          line.includes("openai") &&
-          line.includes("api key yes") &&
-          line.includes("http://172.24.160.1:7861/v1")
-      ),
-      "expected /model key and /model url to confirm the stored OpenAI key and URL"
-    );
-  } finally {
-    db.close();
-    fs.rmSync(dbPath, { force: true });
-  }
-});
 
 test("ShellRunner supports interactive /models switching", async () => {
   const dbPath = tempDbPath("shell-model-picker");
@@ -1932,6 +1832,52 @@ test("ShellRunner keeps large /models catalogs on a quick-switch shortlist first
       process.env.OPENAI_API_KEY = priorOpenAiApiKey;
     }
 
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
+
+test("ShellRunner supports interactive /packs switching", async () => {
+  const dbPath = tempDbPath("shell-pack-picker");
+  const db = openDatabase(dbPath);
+
+  try {
+    const terminal = new FakeShellTerminal([
+      "/packs",
+      "senpai",
+      "/quit"
+    ]);
+
+    const runner = new ShellRunner({
+      db,
+      terminal
+    });
+
+    await runner.run();
+
+    const settings = db
+      .prepare(
+        `
+          SELECT key, value
+          FROM app_settings
+          WHERE key = 'companion.pack'
+        `
+      )
+      .all() as Array<{ key: string; value: string }>;
+
+    assert.deepEqual(settings, [
+      { key: "companion.pack", value: "senpai" }
+    ]);
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Pick a companion pack")),
+      "expected /packs to ask for a pack"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Pack switched to: senpai")),
+      "expected /packs to confirm the interactive switch"
+    );
+  } finally {
     db.close();
     fs.rmSync(dbPath, { force: true });
   }

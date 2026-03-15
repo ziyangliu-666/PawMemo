@@ -380,7 +380,7 @@ const KNOWN_COMMANDS = [
   { name: "/capture", description: "capture a new word" },
   { name: "/ask", description: "ask a question about a concept" },
   { name: "/models", description: "pick a provider and model from a list" },
-  { name: "/model", description: "choose what model and reasoning effort to use" },
+  { name: "/packs", description: "pick a companion character pack" },
   { name: "/pet", description: "interact with your companion" },
   { name: "/help", description: "show general help commands" },
   { name: "/quit", description: "leave the shell" }

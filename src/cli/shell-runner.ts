@@ -185,7 +185,7 @@ export class ShellRunner {
   private readonly startupCoordinator = new ShellStartupCoordinator();
   private readonly teachFlow = new ShellTeachFlowCoordinator();
   private readonly companionVoiceWriter: LlmShellCompanionVoiceWriter;
-  private readonly activePack: CompanionPackDefinition;
+  private readonly forcedPackId?: string;
   private readonly debugEnabled: boolean;
   private readonly shellState: ShellState = {
     mood: "idle",
@@ -200,7 +200,7 @@ export class ShellRunner {
     this.surface = options.surface ?? new LineShellSurface(terminal);
     this.executor = new ShellActionExecutor(options.db, options.providerFactory);
     this.debugEnabled = options.debug ?? false;
-    this.activePack = this.executor.getActiveCompanionPack(options.packId);
+    this.forcedPackId = options.packId;
     this.companionVoiceWriter = new LlmShellCompanionVoiceWriter(
       this.executor,
       options.providerFactory
@@ -219,6 +219,10 @@ export class ShellRunner {
     this.conversationAgent = new ShellConversationAgent(
       new LlmShellPlanner(this.executor, options.providerFactory)
     );
+  }
+
+  private get activePack(): CompanionPackDefinition {
+    return this.executor.getActiveCompanionPack(this.forcedPackId);
   }
 
   async run(): Promise<void> {
