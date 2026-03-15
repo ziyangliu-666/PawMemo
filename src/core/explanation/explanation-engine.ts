@@ -40,7 +40,7 @@ export class ExplanationEngine {
   private readonly contextBuilder: ExplanationContextBuilder;
 
   constructor(
-    private readonly db: SqliteDatabase,
+    db: SqliteDatabase,
     private readonly providerFactory: (name: LlmProviderName) => LlmProvider = createLlmProvider
   ) {
     this.contextBuilder = new ExplanationContextBuilder(db);

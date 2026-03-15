@@ -28,7 +28,7 @@ export class ExplanationContextBuilder {
   private readonly settings: AppSettingsRepository;
   private readonly words: WordQueryRepository;
 
-  constructor(private readonly db: SqliteDatabase) {
+  constructor(db: SqliteDatabase) {
     this.settings = new AppSettingsRepository(db);
     this.words = new WordQueryRepository(db);
   }

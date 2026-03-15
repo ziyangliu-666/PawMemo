@@ -24,7 +24,6 @@ import {
   centerDisplayLine,
   fitComposerViewport,
   fitDisplayLine,
-  tailDisplayText,
   wrapDisplayText,
   wrapDisplayTextWithPrefixes
 } from "../lib/text-wrap";
@@ -2166,18 +2165,8 @@ export class TuiShellSurface extends BaseShellSurface {
     };
   }
 
-  private tailDisplayText(text: string, maxWidth: number): string {
-    return tailDisplayText(text, maxWidth);
-  }
-
-
-
   private fitLine(text: string, columns: number): string {
     return fitDisplayLine(text, columns);
-  }
-
-  private centerDisplayLine(text: string, columns: number): string {
-    return centerDisplayLine(text, columns);
   }
 
   private centerStudyCardLine(text: string, width: number): string {

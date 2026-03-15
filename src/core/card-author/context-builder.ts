@@ -22,7 +22,7 @@ function requireValue(name: string, value: string): string {
 export class CardAuthorContextBuilder {
   private readonly settings: AppSettingsRepository;
 
-  constructor(private readonly db: SqliteDatabase) {
+  constructor(db: SqliteDatabase) {
     this.settings = new AppSettingsRepository(db);
   }
 

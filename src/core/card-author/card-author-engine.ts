@@ -31,7 +31,7 @@ export class CardAuthorEngine {
   private readonly contextBuilder: CardAuthorContextBuilder;
 
   constructor(
-    private readonly db: SqliteDatabase,
+    db: SqliteDatabase,
     private readonly providerFactory: (name: LlmProviderName) => LlmProvider = createLlmProvider
   ) {
     this.contextBuilder = new CardAuthorContextBuilder(db);

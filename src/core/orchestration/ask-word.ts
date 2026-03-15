@@ -10,7 +10,7 @@ export class AskWordService {
 
   constructor(
     db: SqliteDatabase,
-    private readonly providerFactory: (name: LlmProviderName) => LlmProvider = createLlmProvider
+    providerFactory: (name: LlmProviderName) => LlmProvider = createLlmProvider
   ) {
     this.explanationEngine = new ExplanationEngine(db, providerFactory);
   }

@@ -315,18 +315,6 @@ export class ReviewSessionRunner {
     };
   }
 
-  static fromDatabase(
-    db: SqliteDatabase,
-    copy?: ReviewSessionCopy
-  ): ReviewSessionRunner {
-    const study = new StudyServices(db);
-    return new ReviewSessionRunner(
-      createStudyReviewSessionServices(study),
-      new ReadlineReviewSessionTerminal(),
-      copy
-    );
-  }
-
   static withTerminal(
     db: SqliteDatabase,
     terminal: ReviewSessionTerminal,
@@ -346,17 +334,6 @@ export class ReviewSessionRunner {
     copy?: ReviewSessionCopy
   ): ReviewSessionRunner {
     return new ReviewSessionRunner(services, terminal, copy);
-  }
-
-  static withDefaultTerminal(
-    services: ReviewSessionServices,
-    copy?: ReviewSessionCopy
-  ): ReviewSessionRunner {
-    return new ReviewSessionRunner(
-      services,
-      new ReadlineReviewSessionTerminal(),
-      copy
-    );
   }
 
   async run(options: ReviewSessionRunOptions = {}): Promise<ReviewSessionRunResult> {
