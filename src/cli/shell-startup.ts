@@ -13,11 +13,14 @@ export interface ShellStartupEntry {
 export class ShellStartupCoordinator {
   createEntry(
     summary: CompanionSignalsResult,
-    home: HomeProjectionResult
+    home: HomeProjectionResult,
+    options: {
+      hasUsableProviderApiKey?: boolean;
+    } = {}
   ): ShellStartupEntry {
     return {
       mood: resolveStartupMood(home),
-      text: presentShellStartupIntro(summary, home)
+      text: presentShellStartupIntro(summary, home, options)
     };
   }
 

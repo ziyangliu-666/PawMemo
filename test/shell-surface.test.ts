@@ -548,6 +548,44 @@ test("TuiShellSurface supports tab-and-enter review selections", async () => {
   assert.match(output, /› .*?\(E\) Easy/);
 });
 
+test("TuiShellSurface keeps the active selection visible until the selection promise fully settles", async () => {
+  const terminal = new FakeShellTerminal([], true);
+  const surface = new TuiShellSurface(terminal, {
+    inputMode: "external-composer"
+  });
+  const reviewTerminal = surface.createReviewSessionTerminal();
+
+  surface.beginShell("Momo");
+  const selectionPromise = reviewTerminal.select?.({
+    promptText: "How did that feel?",
+    initialValue: "good",
+    choices: [
+      { value: "again", label: "Again", aliases: ["a"] },
+      { value: "hard", label: "Hard", aliases: ["h"] },
+      { value: "good", label: "Good", aliases: ["g"] },
+      { value: "easy", label: "Easy", aliases: ["e"] }
+    ]
+  });
+
+  assert.ok(selectionPromise);
+  let snapshot = surface.getFrameSnapshot();
+  assert.equal(snapshot.composer.selectionPrompt?.promptText, "How did that feel?");
+
+  surface.applyExternalInput({ kind: "key", key: "submit" });
+  snapshot = surface.getFrameSnapshot();
+  assert.equal(
+    snapshot.composer.selectionPrompt?.promptText,
+    "How did that feel?"
+  );
+
+  const selection = await selectionPromise;
+  snapshot = surface.getFrameSnapshot();
+
+  assert.equal(selection, "good");
+  assert.equal(snapshot.composer.selectionPrompt, null);
+  surface.close();
+});
+
 test("TuiShellSurface merges one review card history into one centered study card", () => {
   const terminal = new FakeShellTerminal([], true);
   const surface = new TuiShellSurface(terminal);

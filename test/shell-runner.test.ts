@@ -7,6 +7,7 @@ import path from "node:path";
 import { ShellRunner } from "../src/cli/shell-runner";
 import { CaptureWordService } from "../src/core/orchestration/capture-word";
 import { ReviewService } from "../src/core/orchestration/review-service";
+import type { LlmModelInfo } from "../src/core/domain/models";
 import { ProviderRequestError } from "../src/lib/errors";
 import type {
   LlmProvider,
@@ -14,6 +15,8 @@ import type {
   LlmTextResponse,
   LlmTextStreamRequest
 } from "../src/llm/types";
+import { nowIso } from "../src/lib/time";
+import { AppSettingsRepository } from "../src/storage/repositories/app-settings-repository";
 import { openDatabase } from "../src/storage/sqlite/database";
 
 function tempDbPath(name: string): string {
@@ -52,6 +55,16 @@ class FakeGeminiProvider implements LlmProvider {
 
   async generateText(request: LlmTextRequest): Promise<LlmTextResponse> {
     this.lastRequest = request;
+
+    if (/shell companion voice-bank templates/i.test(request.systemInstruction)) {
+      return {
+        text: JSON.stringify({
+          status_snapshot: "I'm still here, so we can start small.",
+          idle_prompt: "Give me one honest word, and I'll keep it with me.",
+          stats_summary: "You moved {{todayReviewedCount}} today. I was paying attention."
+        })
+      };
+    }
 
     if (/shell planner/i.test(request.systemInstruction)) {
       const prompt = request.userPrompt;
@@ -124,6 +137,48 @@ class FakeGeminiProvider implements LlmProvider {
         return {
           text: JSON.stringify({
             kind: "rescue"
+          })
+        };
+      }
+
+      if (/Current user input: show me luminous's cards/i.test(prompt)) {
+        return {
+          text: JSON.stringify({
+            kind: "card",
+            operation: "list",
+            word: "luminous"
+          })
+        };
+      }
+
+      if (/Current user input: pause the cloze card for luminous/i.test(prompt)) {
+        return {
+          text: JSON.stringify({
+            kind: "card",
+            operation: "pause",
+            word: "luminous",
+            cardType: "cloze"
+          })
+        };
+      }
+
+      if (/Current user input: change card 1 answer to 发光的/i.test(prompt)) {
+        return {
+          text: JSON.stringify({
+            kind: "card",
+            operation: "update",
+            cardId: 1,
+            answer: "发光的"
+          })
+        };
+      }
+
+      if (/Current user input: delete card 1/i.test(prompt)) {
+        return {
+          text: JSON.stringify({
+            kind: "card",
+            operation: "delete",
+            cardId: 1
           })
         };
       }
@@ -332,6 +387,41 @@ test("ShellRunner reuses capture flow and updates companion output", async () =>
 
     assert.equal(counts.lexeme_count, 1);
     assert.equal(counts.card_count, 2);
+  } finally {
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
+test("ShellRunner can use an LLM-generated companion voice bank for idle turns", async () => {
+  const dbPath = tempDbPath("shell-runner-voice-bank");
+  const db = openDatabase(dbPath);
+
+  try {
+    new AppSettingsRepository(db).setLlmSettings(
+      {
+        provider: "gemini",
+        model: "gemini-2.5-flash",
+        apiKey: "test-key"
+      },
+      nowIso()
+    );
+
+    const terminal = new FakeShellTerminal(["", "", "/quit"]);
+    const runner = new ShellRunner({
+      db,
+      terminal,
+      providerFactory: () => new FakeGeminiProvider()
+    });
+
+    await runner.run();
+
+    assert.ok(
+      terminal.writes.some((line) =>
+        line.includes("Give me one honest word, and I'll keep it with me.")
+      ),
+      "expected the shell to replace idle companion copy with a generated voice-bank line"
+    );
   } finally {
     db.close();
     fs.rmSync(dbPath, { force: true });
@@ -1292,6 +1382,200 @@ test("ShellRunner uses planner replies for unmatched natural chat", async () => 
   }
 });
 
+test("ShellRunner accepts natural-language card workspace actions", async () => {
+  const dbPath = tempDbPath("shell-natural-cards");
+  const db = openDatabase(dbPath);
+
+  try {
+    const provider: LlmProvider = {
+      name: "gemini",
+      async generateText(request: LlmTextRequest): Promise<LlmTextResponse> {
+        if (/shell companion voice-bank templates/i.test(request.systemInstruction)) {
+          return {
+            text: JSON.stringify({
+              status_snapshot: "I'm still here, so we can start small."
+            })
+          };
+        }
+
+        if (/shell planner/i.test(request.systemInstruction)) {
+          const prompt = request.userPrompt;
+
+          if (/Current user input: 列出所有卡片呢/i.test(prompt)) {
+            return {
+              text: JSON.stringify({
+                kind: "card",
+                operation: "list"
+              })
+            };
+          }
+
+          if (/Current user input: show me luminous's cards/i.test(prompt)) {
+            return {
+              text: JSON.stringify({
+                kind: "card",
+                operation: "list",
+                word: "luminous"
+              })
+            };
+          }
+
+          if (/Current user input: pause the cloze card for luminous/i.test(prompt)) {
+            return {
+              text: JSON.stringify({
+                kind: "card",
+                operation: "pause",
+                word: "luminous",
+                cardType: "cloze"
+              })
+            };
+          }
+
+          if (/Current user input: change card 1 answer to 发光的/i.test(prompt)) {
+            return {
+              text: JSON.stringify({
+                kind: "card",
+                operation: "update",
+                cardId: 1,
+                answer: "发光的"
+              })
+            };
+          }
+
+          if (/Current user input: delete card 1/i.test(prompt)) {
+            return {
+              text: JSON.stringify({
+                kind: "card",
+                operation: "delete",
+                cardId: 1
+              })
+            };
+          }
+        }
+
+        return {
+          text: JSON.stringify({
+            kind: "reply",
+            message: "我是 PawMemo 的学习 shell。"
+          })
+        };
+      },
+      async listModels(): Promise<never[]> {
+        return [];
+      }
+    };
+
+    const capture = new CaptureWordService(db);
+    const settings = new AppSettingsRepository(db);
+    settings.setStoredApiKey("gemini", "test-key", nowIso("2026-03-15T10:00:00.000Z"));
+    capture.capture({
+      word: "luminous",
+      context: "The jellyfish gave off a luminous glow.",
+      gloss: "emitting light",
+      capturedAt: "2026-03-15T10:00:00.000Z"
+    });
+
+    const terminal = new FakeShellTerminal([
+      "列出所有卡片呢",
+      "show me luminous's cards",
+      "pause the cloze card for luminous",
+      "show me luminous's cards",
+      "change card 1 answer to 发光的",
+      "delete card 1",
+      "/quit"
+    ]);
+
+    const runner = new ShellRunner({
+      db,
+      terminal,
+      providerFactory: () => provider
+    });
+
+    await runner.run();
+
+    assert.ok(
+      terminal.writes.some((line) => line.includes("I found 2 cards in the workspace")),
+      "expected the shell to support planner-driven broad card lists without forcing a word clarification"
+    );
+
+    const rows = db
+      .prepare(
+        `
+          SELECT id, answer_text, lifecycle_state
+          FROM review_cards
+          ORDER BY id ASC
+        `
+      )
+      .all() as Array<{ id: number; answer_text: string; lifecycle_state: string }>;
+
+    assert.deepEqual(rows, [
+      {
+        id: 2,
+        answer_text: "luminous\nMeaning: emitting light",
+        lifecycle_state: "paused"
+      }
+    ]);
+  } finally {
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
+test("ShellRunner supports direct /cards workspace commands", async () => {
+  const dbPath = tempDbPath("shell-slash-cards");
+  const db = openDatabase(dbPath);
+
+  try {
+    const capture = new CaptureWordService(db);
+    capture.capture({
+      word: "luminous",
+      context: "The jellyfish gave off a luminous glow.",
+      gloss: "emitting light",
+      capturedAt: "2026-03-15T10:00:00.000Z"
+    });
+
+    const terminal = new FakeShellTerminal([
+      '/cards create luminous usage --prompt "Use luminous in a sentence." --answer "The lake looked luminous at dawn."',
+      '/cards update luminous:usage --answer "The clouds looked luminous at dawn."',
+      "/cards archive luminous:usage",
+      "/cards luminous",
+      "/cards delete luminous:usage",
+      "/quit"
+    ]);
+
+    const runner = new ShellRunner({
+      db,
+      terminal
+    });
+
+    await runner.run();
+
+    assert.ok(
+      terminal.writes.some((line) => line.includes('I added card #3 for "luminous".')),
+      "expected /cards create to add a new card"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes('I updated card #3 for "luminous".')),
+      "expected /cards update to mutate a word-scoped selector"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes('I archived card #3 for "luminous".')),
+      "expected /cards archive to change lifecycle state"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes("#3 luminous · usage · archived")),
+      "expected /cards list to show the archived card state"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes('I deleted card #3 for "luminous".')),
+      "expected /cards delete to remove the targeted card"
+    );
+  } finally {
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
 test("ShellRunner shows planner setup guidance when no API key is configured", async () => {
   const dbPath = tempDbPath("shell-planner-guidance");
   const db = openDatabase(dbPath);
@@ -1318,12 +1602,16 @@ test("ShellRunner shows planner setup guidance when no API key is configured", a
     await runner.run();
 
     assert.ok(
-      terminal.writes.some((line) => line.includes("I need a live model connection before I can handle natural chat.")),
-      "expected setup guidance when planner configuration is missing"
+      terminal.writes.some((line) => line.includes("I'm here, even before the live model is set up.")),
+      "expected warm no-model guidance when planner configuration is missing"
     );
     assert.ok(
-      terminal.writes.some((line) => line.includes("Check `/models`, or set a key with `/model key ...` and try again.")),
-      "expected model guidance when planner configuration is missing"
+      terminal.writes.some((line) => line.includes("Start with one word through `/capture ...`, or open `/help` for a quick tour.")),
+      "expected local action guidance when planner configuration is missing"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Use `/models` when you want free chat, ask, and teach to wake up.")),
+      "expected model setup guidance when planner configuration is missing"
     );
   } finally {
     if (priorApiKey === undefined) {
@@ -1539,8 +1827,103 @@ test("ShellRunner supports interactive /models switching", async () => {
       "expected /models to ask for a model next"
     );
     assert.ok(
-      terminal.writes.some((line) => line.includes("Current: openai (gpt-5-mini)")),
-      "expected /models to confirm the updated model status"
+      terminal.writes.some((line) => line.includes('Switched to openai with "gpt-5-mini".')),
+      "expected /models to confirm the quick switch in a short shell reply"
+    );
+  } finally {
+    if (priorOpenAiApiKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = priorOpenAiApiKey;
+    }
+
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
+test("ShellRunner keeps large /models catalogs on a quick-switch shortlist first", async () => {
+  const dbPath = tempDbPath("shell-model-picker-shortlist");
+  const db = openDatabase(dbPath);
+  const priorOpenAiApiKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "test-openai-key";
+
+  try {
+    const manyModels: LlmModelInfo[] = Array.from({ length: 16 }, (_, index) => ({
+      id: `gpt-5-variant-${String(index + 1).padStart(2, "0")}`,
+      provider: "openai" as const,
+      displayName: null,
+      createdAt: null,
+      ownedBy: "openai"
+    }));
+
+    manyModels.unshift(
+      {
+        id: "gpt-5-mini",
+        provider: "openai",
+        displayName: "GPT-5 Mini",
+        createdAt: null,
+        ownedBy: "openai"
+      },
+      {
+        id: "gpt-5",
+        provider: "openai",
+        displayName: "GPT-5",
+        createdAt: null,
+        ownedBy: "openai"
+      }
+    );
+
+    const terminal = new FakeShellTerminal([
+      "/models openai",
+      "b",
+      "gpt-5",
+      "/quit"
+    ]);
+
+    const runner = new ShellRunner({
+      db,
+      terminal,
+      providerFactory: (name) => ({
+        name,
+        async generateText() {
+          throw new Error("generateText should not be called during /models");
+        },
+        async listModels() {
+          if (name === "openai") {
+            return manyModels;
+          }
+
+          return [
+            {
+              id: "gemini-2.5-flash",
+              provider: "gemini",
+              displayName: "Gemini 2.5 Flash",
+              createdAt: null,
+              ownedBy: "google"
+            }
+          ];
+        }
+      })
+    });
+
+    await runner.run();
+
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Quick switch openai")),
+      "expected /models to open with a quick-switch shortlist for large catalogs"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Browse all models")),
+      "expected the shortlist to offer an explicit browse-all step"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes("Browse all openai models")),
+      "expected the full list to appear only after the explicit browse step"
+    );
+    assert.ok(
+      terminal.writes.some((line) => line.includes('Switched to openai with "gpt-5".')),
+      "expected the large-catalog quick switch to end with a short confirmation"
     );
   } finally {
     if (priorOpenAiApiKey === undefined) {

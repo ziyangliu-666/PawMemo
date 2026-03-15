@@ -135,6 +135,57 @@ test("normalizeShellPlannerPayload maps rescue output", () => {
   });
 });
 
+test("normalizeShellPlannerPayload maps card lifecycle output", () => {
+  const result = normalizeShellPlannerPayload({
+    kind: "card",
+    operation: "pause",
+    word: "luminous",
+    cardType: "cloze"
+  });
+
+  assert.deepEqual(result, {
+    kind: "card-set-lifecycle",
+    input: {
+      selector: {
+        word: "luminous",
+        cardType: "cloze"
+      },
+      lifecycleState: "paused"
+    }
+  });
+});
+
+test("normalizeShellPlannerPayload maps broad card list output without a word", () => {
+  const result = normalizeShellPlannerPayload({
+    kind: "card",
+    operation: "list"
+  });
+
+  assert.deepEqual(result, {
+    kind: "card-list",
+    input: {}
+  });
+});
+
+test("normalizeShellPlannerPayload maps card update output", () => {
+  const result = normalizeShellPlannerPayload({
+    kind: "card",
+    operation: "update",
+    cardId: 12,
+    answer: "生动的"
+  });
+
+  assert.deepEqual(result, {
+    kind: "card-update",
+    input: {
+      selector: {
+        cardId: 12
+      },
+      answerText: "生动的"
+    }
+  });
+});
+
 test("normalizeShellPlannerPayload reuses raw input as fallback context", () => {
   const result = normalizeShellPlannerPayload(
     {
@@ -248,6 +299,11 @@ test("buildShellPlannerPrompt layers structured companion prompt fields into pla
   assert.match(prompt.userPrompt, /Home entry: return_review/);
   assert.match(prompt.userPrompt, /Home suggested action: review/);
   assert.match(prompt.userPrompt, /Home return gap days: 3/);
+  assert.match(prompt.systemInstruction, /Use card when the user wants to inspect or manage existing cards directly/i);
+  assert.match(prompt.systemInstruction, /use card\/list without a word/i);
+  assert.match(prompt.userPrompt, /show all cards/i);
+  assert.match(prompt.userPrompt, /列出所有卡片/);
+  assert.match(prompt.userPrompt, /pause the cloze card for vivid/i);
 });
 
 test("LlmShellPlanner uses the provider for chat planning when configured", async () => {

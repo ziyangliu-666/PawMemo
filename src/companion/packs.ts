@@ -609,7 +609,10 @@ export function loadCompanionPack(packId: string): CompanionPackDefinition {
   throw new ConfigurationError(`Unknown companion pack: ${packId}`);
 }
 
-function interpolateTemplate(template: string, context: CompanionTemplateContext): string {
+export function interpolateCompanionTemplate(
+  template: string,
+  context: CompanionTemplateContext
+): string {
   const dueCount = context.dueCount ?? 0;
   const dueCountWord = dueCount === 1 ? "card" : "cards";
   const reviewedCount = context.reviewedCount ?? 0;
@@ -660,7 +663,7 @@ export function renderCompanionReaction(
     return "";
   }
 
-  return interpolateTemplate(pickTemplate(templates, frame), context);
+  return interpolateCompanionTemplate(pickTemplate(templates, frame), context);
 }
 
 export function renderCompanionDefaultLine(
@@ -685,5 +688,5 @@ export function renderCompanionDefaultLine(
     templates = templateSet.withRecentWord;
   }
 
-  return interpolateTemplate(pickTemplate(templates, frame), context);
+  return interpolateCompanionTemplate(pickTemplate(templates, frame), context);
 }

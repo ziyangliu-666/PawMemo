@@ -1,10 +1,15 @@
 import type {
   AskWordInput,
   CaptureWordInput,
+  CreateStudyCardInput,
   HomeProjectionResult,
   LlmSettings,
   LlmProviderName,
-  TeachWordInput
+  ReviewCardType,
+  SetStudyCardLifecycleInput,
+  StudyCardSelector,
+  TeachWordInput,
+  UpdateStudyCardInput
 } from "../core/domain/models";
 import type {
   CompanionMood,
@@ -54,14 +59,30 @@ export type ShellPlannerDecision =
   | { kind: "quit" }
   | { kind: "ask"; input: AskWordInput }
   | { kind: "teach"; input: TeachWordInput; confirmationMessage?: string }
-  | { kind: "capture"; input: CaptureWordInput };
+  | { kind: "capture"; input: CaptureWordInput }
+  | {
+      kind: "card-list";
+      input: {
+        word?: string;
+        cardType?: ReviewCardType;
+      };
+    }
+  | { kind: "card-create"; input: CreateStudyCardInput }
+  | { kind: "card-update"; input: UpdateStudyCardInput }
+  | { kind: "card-set-lifecycle"; input: SetStudyCardLifecycleInput }
+  | { kind: "card-delete"; input: { selector: StudyCardSelector } };
 
 interface ShellPlannerPayload {
   kind?: unknown;
   message?: unknown;
+  operation?: unknown;
+  cardId?: unknown;
   word?: unknown;
+  cardType?: unknown;
   context?: unknown;
   gloss?: unknown;
+  prompt?: unknown;
+  answer?: unknown;
 }
 
 interface ParsedJsonString {
@@ -76,9 +97,53 @@ function toShellPlannerPayload(
   return {
     kind: payload.kind,
     message: payload.message,
+    operation: payload.operation,
+    cardId: payload.cardId,
     word: payload.word,
+    cardType: payload.cardType,
     context: payload.context,
-    gloss: payload.gloss
+    gloss: payload.gloss,
+    prompt: payload.prompt,
+    answer: payload.answer
+  };
+}
+
+function readCardType(value: unknown): ReviewCardType | null {
+  return value === "recognition" ||
+    value === "cloze" ||
+    value === "usage" ||
+    value === "contrast"
+    ? value
+    : null;
+}
+
+function readPositiveInteger(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return value;
+  }
+
+  if (typeof value === "string" && /^[1-9]\d*$/.test(value.trim())) {
+    return Number.parseInt(value.trim(), 10);
+  }
+
+  return null;
+}
+
+function buildStudyCardSelector(
+  payload: ShellPlannerPayload
+): StudyCardSelector | null {
+  const cardId = readPositiveInteger(payload.cardId);
+  const word = readTrimmedString(payload.word) ?? undefined;
+  const cardType = readCardType(payload.cardType) ?? undefined;
+
+  if (cardId === null && !word) {
+    return null;
+  }
+
+  return {
+    ...(cardId !== null ? { cardId } : {}),
+    ...(word ? { word } : {}),
+    ...(cardType ? { cardType } : {})
   };
 }
 
@@ -101,7 +166,7 @@ function fallbackContext(rawInput?: string): string | null {
 }
 
 function buildClarifyMessage(
-  kind: "ask" | "teach" | "capture",
+  kind: "ask" | "teach" | "capture" | "card",
   payload: ShellPlannerPayload,
   rawInput?: string
 ): string {
@@ -114,6 +179,8 @@ function buildClarifyMessage(
   const hasFallbackContext = fallbackContext(rawInput) !== null;
   const hasWord = readTrimmedString(payload.word) !== null;
   const hasGloss = readTrimmedString(payload.gloss) !== null;
+  const hasCardId = readPositiveInteger(payload.cardId) !== null;
+  const operation = readTrimmedString(payload.operation)?.toLowerCase();
 
   switch (kind) {
     case "ask":
@@ -138,6 +205,24 @@ function buildClarifyMessage(
       }
 
       return "Give me a little more detail so I can save that cleanly.";
+    case "card":
+      if (operation === "create") {
+        return "Tell me the word, card type, prompt, and answer you want for that new card.";
+      }
+
+      if (operation === "update") {
+        return "Tell me which card to change, then give me the new prompt, the new answer, or both.";
+      }
+
+      if (operation === "list") {
+        return "Tell me which word's cards you want to inspect.";
+      }
+
+      if (!hasCardId && !hasWord) {
+        return "Tell me which card you mean with a card id or a word.";
+      }
+
+      return "Tell me a little more so I can manage the right card.";
   }
 }
 
@@ -252,6 +337,126 @@ function normalizeShellPlannerPayload(
         kind: "capture",
         input: { word, context, gloss }
       };
+    }
+    case "card": {
+      const operation = readTrimmedString(payload.operation)?.toLowerCase();
+
+      if (!operation) {
+        return {
+          kind: "clarify",
+          mood: "confused",
+          message: buildClarifyMessage("card", payload, rawInput)
+        };
+      }
+
+      switch (operation) {
+        case "list": {
+          const word = readTrimmedString(payload.word) ?? undefined;
+          const cardType = readCardType(payload.cardType) ?? undefined;
+
+          return {
+            kind: "card-list",
+            input: {
+              ...(word ? { word } : {}),
+              ...(cardType ? { cardType } : {})
+            }
+          };
+        }
+        case "create": {
+          const word = readTrimmedString(payload.word);
+          const cardType = readCardType(payload.cardType);
+          const prompt = readTrimmedString(payload.prompt);
+          const answer = readTrimmedString(payload.answer);
+
+          if (!word || !cardType || !prompt || !answer) {
+            return {
+              kind: "clarify",
+              mood: "confused",
+              message: buildClarifyMessage("card", payload, rawInput)
+            };
+          }
+
+          return {
+            kind: "card-create",
+            input: {
+              word,
+              cardType,
+              promptText: prompt,
+              answerText: answer
+            }
+          };
+        }
+        case "update": {
+          const selector = buildStudyCardSelector(payload);
+          const prompt = readTrimmedString(payload.prompt) ?? undefined;
+          const answer = readTrimmedString(payload.answer) ?? undefined;
+
+          if (!selector || (!prompt && !answer)) {
+            return {
+              kind: "clarify",
+              mood: "confused",
+              message: buildClarifyMessage("card", payload, rawInput)
+            };
+          }
+
+          return {
+            kind: "card-update",
+            input: {
+              selector,
+              ...(prompt ? { promptText: prompt } : {}),
+              ...(answer ? { answerText: answer } : {})
+            }
+          };
+        }
+        case "pause":
+        case "resume":
+        case "archive": {
+          const selector = buildStudyCardSelector(payload);
+
+          if (!selector) {
+            return {
+              kind: "clarify",
+              mood: "confused",
+              message: buildClarifyMessage("card", payload, rawInput)
+            };
+          }
+
+          return {
+            kind: "card-set-lifecycle",
+            input: {
+              selector,
+              lifecycleState:
+                operation === "pause"
+                  ? "paused"
+                  : operation === "archive"
+                    ? "archived"
+                    : "active"
+            }
+          };
+        }
+        case "delete": {
+          const selector = buildStudyCardSelector(payload);
+
+          if (!selector) {
+            return {
+              kind: "clarify",
+              mood: "confused",
+              message: buildClarifyMessage("card", payload, rawInput)
+            };
+          }
+
+          return {
+            kind: "card-delete",
+            input: {
+              selector
+            }
+          };
+        }
+        default:
+          throw new ProviderRequestError(
+            `Shell planner returned unsupported card operation: ${operation}`
+          );
+      }
     }
     default: {
       const unsupportedKind =

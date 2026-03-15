@@ -10,6 +10,8 @@ export type ReviewCardState = "new" | "learning" | "review" | "relearning";
 
 export type ReviewCardType = "recognition" | "cloze" | "usage" | "contrast";
 
+export type StudyCardLifecycleState = "active" | "paused" | "archived";
+
 export type ReviewGrade = "again" | "hard" | "good" | "easy";
 
 export type LlmProviderName = "gemini" | "openai" | "anthropic";
@@ -66,6 +68,7 @@ export interface ReviewCardRecord {
   promptText: string;
   answerText: string;
   state: ReviewCardState;
+  lifecycleState: StudyCardLifecycleState;
   dueAt: string;
   createdAt: string;
   updatedAt: string;
@@ -85,10 +88,72 @@ export interface DueReviewCard {
   promptText: string;
   answerText: string;
   state: ReviewCardState;
+  lifecycleState: StudyCardLifecycleState;
   dueAt: string;
   createdAt: string;
   updatedAt: string;
 }
+
+export interface StudyCardSelector {
+  cardId?: number;
+  word?: string;
+  cardType?: ReviewCardType;
+}
+
+export interface ListStudyCardsInput {
+  word?: string;
+  cardType?: ReviewCardType;
+  lifecycleStates?: StudyCardLifecycleState[];
+  limit?: number;
+}
+
+export interface ListStudyCardsResult {
+  cards: DueReviewCard[];
+}
+
+export interface CreateStudyCardInput {
+  word: string;
+  cardType: ReviewCardType;
+  promptText: string;
+  answerText: string;
+}
+
+export interface UpdateStudyCardInput {
+  selector: StudyCardSelector;
+  promptText?: string;
+  answerText?: string;
+}
+
+export interface SetStudyCardLifecycleInput {
+  selector: StudyCardSelector;
+  lifecycleState: StudyCardLifecycleState;
+}
+
+export interface DeleteStudyCardInput {
+  selector: StudyCardSelector;
+}
+
+export type StudyCardOperationInput =
+  | { kind: "list"; input: ListStudyCardsInput }
+  | { kind: "create"; input: CreateStudyCardInput }
+  | { kind: "update"; input: UpdateStudyCardInput }
+  | { kind: "set-lifecycle"; input: SetStudyCardLifecycleInput }
+  | { kind: "delete"; input: DeleteStudyCardInput };
+
+export type StudyCardOperationResult =
+  | {
+      kind: "list";
+      cards: DueReviewCard[];
+    }
+  | {
+      kind: "create" | "update" | "set-lifecycle";
+      card: DueReviewCard;
+      previousLifecycleState: StudyCardLifecycleState | null;
+    }
+  | {
+      kind: "delete";
+      card: DueReviewCard;
+    };
 
 export interface CaptureWordInput {
   word: string;

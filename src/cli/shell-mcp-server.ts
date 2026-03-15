@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { createInterface } from "node:readline";
 import { stdin as input, stdout as output, stderr } from "node:process";
 
@@ -17,7 +18,10 @@ const MCP_SERVER_INFO = {
   title: "PawMemo Shell",
   version: "0.1.0"
 } as const;
+const MCP_SERVER_STARTED_AT_MS = Date.now();
+const MCP_SERVER_STARTED_AT = new Date(MCP_SERVER_STARTED_AT_MS).toISOString();
 const SESSIONS_RESOURCE_URI = "pawmemo://sessions";
+const SERVER_RESOURCE_URI = "pawmemo://server";
 
 interface JsonRpcRequest {
   jsonrpc?: "2.0";
@@ -77,6 +81,39 @@ interface McpCallToolResult {
   content: Array<Record<string, unknown>>;
   structuredContent?: unknown;
   isError?: boolean;
+}
+
+interface LatestFileSnapshot {
+  rootPath: string;
+  latestPath: string | null;
+  latestModifiedAt: string | null;
+  latestModifiedMs: number | null;
+}
+
+interface McpServerStatus {
+  server: typeof MCP_SERVER_INFO;
+  processId: number;
+  startedAt: string;
+  nodeVersion: string;
+  platform: NodeJS.Platform;
+  cwd: string;
+  argv: string[];
+  entryPointPath: string | null;
+  defaultDbPath: string | null;
+  activeSessionCount: number;
+  activeSessionIds: string[];
+  dist: {
+    rootPath: string;
+    latestPath: string | null;
+    latestModifiedAt: string | null;
+    changedSinceLaunch: boolean;
+  };
+  freshness: {
+    serverStartedAt: string;
+    latestBuildAt: string | null;
+    isStale: boolean;
+    hint: string;
+  };
 }
 
 interface ToolCallOptions {
@@ -207,6 +244,63 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
+function toIsoTimestamp(timestampMs: number): string {
+  return new Date(timestampMs).toISOString();
+}
+
+function scanLatestModifiedFile(rootPath: string): LatestFileSnapshot {
+  const latest = {
+    path: null as string | null,
+    modifiedMs: null as number | null
+  };
+
+  const visit = (currentPath: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(currentPath, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const entryPath = path.join(currentPath, entry.name);
+      if (entry.isDirectory()) {
+        visit(entryPath);
+        continue;
+      }
+
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      let stats: fs.Stats;
+      try {
+        stats = fs.statSync(entryPath);
+      } catch {
+        continue;
+      }
+
+      if (
+        latest.modifiedMs === null ||
+        stats.mtimeMs > latest.modifiedMs
+      ) {
+        latest.modifiedMs = stats.mtimeMs;
+        latest.path = entryPath;
+      }
+    }
+  };
+
+  visit(rootPath);
+
+  return {
+    rootPath,
+    latestPath: latest.path,
+    latestModifiedAt:
+      latest.modifiedMs === null ? null : toIsoTimestamp(latest.modifiedMs),
+    latestModifiedMs: latest.modifiedMs
+  };
+}
+
 export class PawMemoShellMcpController {
   private readonly sessions = new Map<string, PawMemoShellHarness>();
 
@@ -214,6 +308,15 @@ export class PawMemoShellMcpController {
 
   listTools(): McpToolDefinition[] {
     return [
+      {
+        name: "server_status",
+        description:
+          "Return MCP runtime status, including process freshness versus the latest built dist files.",
+        inputSchema: {
+          type: "object",
+          properties: {}
+        }
+      },
       {
         name: "shell_start",
         description: "Start a headless PawMemo TUI shell session and return a semantic frame snapshot.",
@@ -390,6 +493,8 @@ export class PawMemoShellMcpController {
     const params = isRecord(args) ? args : {};
 
     switch (name) {
+      case "server_status":
+        return this.getServerStatus();
       case "shell_start":
         return await this.startSession(params, options.signal);
       case "shell_submit":
@@ -419,6 +524,14 @@ export class PawMemoShellMcpController {
 
   listResources(): McpResourceDefinition[] {
     const resources: McpResourceDefinition[] = [
+      {
+        uri: SERVER_RESOURCE_URI,
+        name: "server",
+        title: "PawMemo MCP Server Status",
+        description:
+          "Connected MCP server runtime metadata, including freshness relative to the latest built dist files.",
+        mimeType: "application/json"
+      },
       {
         uri: SESSIONS_RESOURCE_URI,
         name: "sessions",
@@ -582,6 +695,14 @@ export class PawMemoShellMcpController {
   }
 
   readResource(uri: string): unknown {
+    if (uri === SERVER_RESOURCE_URI) {
+      return formatResourceContents(
+        uri,
+        "application/json",
+        `${JSON.stringify(this.getServerStatus(), null, 2)}\n`
+      );
+    }
+
     if (uri === SESSIONS_RESOURCE_URI) {
       return formatResourceContents(
         uri,
@@ -858,6 +979,42 @@ export class PawMemoShellMcpController {
     }
 
     return session;
+  }
+
+  private getServerStatus(): McpServerStatus {
+    const distRootPath = path.resolve(__dirname, "..", "..");
+    const latestDist = scanLatestModifiedFile(distRootPath);
+    const isStale =
+      latestDist.latestModifiedMs !== null &&
+      latestDist.latestModifiedMs > MCP_SERVER_STARTED_AT_MS;
+
+    return {
+      server: MCP_SERVER_INFO,
+      processId: process.pid,
+      startedAt: MCP_SERVER_STARTED_AT,
+      nodeVersion: process.version,
+      platform: process.platform,
+      cwd: process.cwd(),
+      argv: [...process.argv],
+      entryPointPath: process.argv[1] ?? null,
+      defaultDbPath: this.options.defaultDbPath ?? null,
+      activeSessionCount: this.sessions.size,
+      activeSessionIds: [...this.sessions.keys()],
+      dist: {
+        rootPath: distRootPath,
+        latestPath: latestDist.latestPath,
+        latestModifiedAt: latestDist.latestModifiedAt,
+        changedSinceLaunch: isStale
+      },
+      freshness: {
+        serverStartedAt: MCP_SERVER_STARTED_AT,
+        latestBuildAt: latestDist.latestModifiedAt,
+        isStale,
+        hint: isStale
+          ? "This MCP process started before the latest built dist change. Restart or reconnect the MCP server before trusting validation snapshots."
+          : "This MCP process is aligned with the latest visible dist build."
+      }
+    };
   }
 }
 

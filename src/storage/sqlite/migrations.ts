@@ -169,6 +169,19 @@ const MIGRATIONS: Migration[] = [
         DROP TABLE IF EXISTS session_summaries
       `
     ]
+  },
+  {
+    version: 3,
+    statements: [
+      `
+        ALTER TABLE review_cards
+        ADD COLUMN lifecycle_state TEXT NOT NULL DEFAULT 'active'
+      `,
+      `
+        CREATE INDEX IF NOT EXISTS idx_review_cards_lifecycle_due
+        ON review_cards(lifecycle_state, state, due_at)
+      `
+    ]
   }
 ];
 

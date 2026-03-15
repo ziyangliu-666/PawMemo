@@ -193,8 +193,39 @@ test("PawMemo MCP stdio server exposes modern handshake and readable resources",
       }>;
     };
     assert.ok(
+      resourcesBefore.resources.some((resource) => resource.uri === "pawmemo://server")
+    );
+    assert.ok(
       resourcesBefore.resources.some((resource) => resource.uri === "pawmemo://sessions")
     );
+
+    const serverStatus = await client.request("tools/call", {
+      name: "server_status",
+      arguments: {}
+    }) as {
+      structuredContent: {
+        processId: number;
+        freshness: {
+          isStale: boolean;
+          hint: string;
+        };
+      };
+    };
+    assert.equal(typeof serverStatus.structuredContent.processId, "number");
+    assert.equal(typeof serverStatus.structuredContent.freshness.isStale, "boolean");
+    assert.match(serverStatus.structuredContent.freshness.hint, /MCP process/i);
+
+    const serverResource = await client.request("resources/read", {
+      uri: "pawmemo://server"
+    }) as {
+      contents: Array<{
+        mimeType: string;
+        text: string;
+      }>;
+    };
+    assert.equal(serverResource.contents[0]?.mimeType, "application/json");
+    assert.match(serverResource.contents[0]?.text ?? "", /"processId":/);
+    assert.match(serverResource.contents[0]?.text ?? "", /"freshness":/);
 
     const templates = await client.request("resources/templates/list", {}) as {
       resourceTemplates: Array<{
@@ -218,6 +249,15 @@ test("PawMemo MCP stdio server exposes modern handshake and readable resources",
     );
     assert.ok(
       prompts.prompts.some((prompt) => prompt.name === "inspect_shell_session")
+    );
+
+    const tools = await client.request("tools/list", {}) as {
+      tools: Array<{
+        name: string;
+      }>;
+    };
+    assert.ok(
+      tools.tools.some((tool) => tool.name === "server_reload")
     );
 
     const started = await client.request("tools/call", {
@@ -265,7 +305,7 @@ test("PawMemo MCP stdio server exposes modern handshake and readable resources",
     };
 
     assert.equal(latestFrame.contents[0]?.mimeType, "text/plain");
-    assert.match(latestFrame.contents[0]?.text ?? "", /Study Nook/);
+    assert.match(latestFrame.contents[0]?.text ?? "", /starting fresh/i);
 
     const latestFrameImage = await client.request("resources/read", {
       uri: `pawmemo://sessions/${sessionId}/snapshots/latest/frame.png`
@@ -307,6 +347,83 @@ test("PawMemo MCP stdio server exposes modern handshake and readable resources",
         sessionId
       }
     });
+  } finally {
+    await client.close();
+  }
+});
+
+test("PawMemo MCP stdio supervisor can reload the worker without a client reconnect", async () => {
+  const client = new JsonRpcClientHarness();
+
+  try {
+    await client.request("initialize", {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: {
+        name: "pawmemo-test",
+        version: "1.0.0"
+      }
+    });
+    client.notify("notifications/initialized");
+
+    const beforeStatus = await client.request("tools/call", {
+      name: "server_status",
+      arguments: {}
+    }) as {
+      structuredContent: {
+        processId: number;
+      };
+    };
+
+    const reload = await client.request("tools/call", {
+      name: "server_reload",
+      arguments: {}
+    }) as {
+      structuredContent: {
+        reloaded: boolean;
+        oldWorkerProcessId: number | null;
+        newWorkerProcessId: number | null;
+      };
+    };
+
+    assert.equal(reload.structuredContent.reloaded, true);
+    assert.equal(
+      reload.structuredContent.oldWorkerProcessId,
+      beforeStatus.structuredContent.processId
+    );
+    assert.notEqual(
+      reload.structuredContent.newWorkerProcessId,
+      beforeStatus.structuredContent.processId
+    );
+
+    const afterStatus = await client.request("tools/call", {
+      name: "server_status",
+      arguments: {}
+    }) as {
+      structuredContent: {
+        processId: number;
+      };
+    };
+
+    assert.equal(
+      afterStatus.structuredContent.processId,
+      reload.structuredContent.newWorkerProcessId
+    );
+
+    const started = await client.request("tools/call", {
+      name: "shell_start",
+      arguments: {
+        dbPath: ":memory:",
+        columns: 72,
+        rows: 20
+      }
+    }) as {
+      structuredContent: {
+        sessionId: string;
+      };
+    };
+
+    assert.match(started.structuredContent.sessionId, /-/);
   } finally {
     await client.close();
   }

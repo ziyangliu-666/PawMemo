@@ -90,12 +90,18 @@ export function describeShellAction(
   switch (action.kind) {
     case "ask":
     case "capture":
+    case "study-card-list":
+    case "study-card-create":
+    case "study-card-update":
+    case "study-card-set-lifecycle":
+    case "study-card-delete":
     case "teach-clarify-context":
     case "teach":
     case "teach-confirm":
       return {
         action: action.kind,
-        word: action.input.word
+        word: "word" in action.input ? action.input.word : undefined,
+        cardId: "selector" in action.input ? action.input.selector.cardId : undefined
       };
     case "command":
       return {

@@ -5,6 +5,7 @@ import {
   formatHomeProjection
 } from "../src/cli/format";
 import {
+  presentShellPlannerSetupGuidance,
   presentShellReviewSessionSummary,
   presentShellStartupIntro,
   presentShellStatsResult
@@ -106,7 +107,59 @@ test("presentShellStartupIntro stays silent for a first-run capture state", () =
     })
   );
 
-  assert.equal(text, null);
+  assert.match(text ?? "", /starting fresh/i);
+  assert.match(text ?? "", /\/capture/i);
+  assert.match(text ?? "", /\/models/i);
+});
+
+test("presentShellStartupIntro trims model setup from first-run copy when a key is already available", () => {
+  const text = presentShellStartupIntro(
+    signals({
+      dueCount: 0,
+      dueReviewCount: 0,
+      dueNewCount: 0,
+      recentWord: null,
+      lastReviewedAt: null,
+      hoursSinceLastReview: null,
+      daysSinceLastReview: null
+    }),
+    home({
+      dueCount: 0,
+      recentWord: null,
+      focusWord: null,
+      focusReason: null,
+      hasPriorReviewHistory: false,
+      isReturnAfterGap: false,
+      returnGapDays: null,
+      entryKind: "capture",
+      suggestedNextAction: "capture",
+      canStopAfterPrimaryAction: false,
+      optionalNextAction: null
+    }),
+    {
+      hasUsableProviderApiKey: true
+    }
+  );
+
+  assert.match(text ?? "", /starting fresh/i);
+  assert.doesNotMatch(text ?? "", /\/models/i);
+});
+
+test("presentShellPlannerSetupGuidance keeps no-model chat pointed at local actions", () => {
+  const text = presentShellPlannerSetupGuidance(home({
+    entryKind: "resume_recent",
+    dueCount: 0,
+    focusWord: "luminous",
+    recentWord: "luminous",
+    focusReason: "recent",
+    isReturnAfterGap: false,
+    returnGapDays: null
+  }));
+
+  assert.match(text, /"luminous" is still close to hand/i);
+  assert.match(text, /\/stats/i);
+  assert.match(text, /\/capture/i);
+  assert.match(text, /\/models/i);
 });
 
 test("presentShellStatsResult turns return-and-rescue into a gentle re-entry plan", () => {

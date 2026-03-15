@@ -4,25 +4,34 @@ import type {
   CaptureWordInput,
   CaptureWordResult,
   CompanionSignalsResult,
+  CreateStudyCardInput,
+  DeleteStudyCardInput,
   DueReviewCard,
   GetReviewQueueInput,
   GradeReviewCardInput,
   GradeReviewCardResult,
   HomeProjectionResult,
+  ListStudyCardsInput,
+  ListStudyCardsResult,
   LlmProviderName,
   RecoveryProjectionResult,
   RescueCandidateResult,
   ReviewQueueResult,
   ReviewRevealResult,
+  SetStudyCardLifecycleInput,
+  StudyCardOperationInput,
+  StudyCardOperationResult,
   TeachWordDraftOutcome,
   TeachWordDraftResult,
   TeachWordInput,
-  TeachWordResult
+  TeachWordResult,
+  UpdateStudyCardInput
 } from "../domain/models";
 import { createLlmProvider } from "../../llm/provider-factory";
 import type { LlmProvider } from "../../llm/types";
 import type { SqliteDatabase } from "../../storage/sqlite/database";
 import { AskWordService } from "./ask-word";
+import { CardWorkspaceService } from "./card-workspace-service";
 import { CaptureWordService } from "./capture-word";
 import { GetCompanionSignalsService } from "./get-companion-signals";
 import { GetHomeProjectionService } from "./get-home-projection";
@@ -37,6 +46,7 @@ export class StudyServices {
   private readonly askService: AskWordService;
   private readonly teachService: TeachWordService;
   private readonly reviewService: ReviewService;
+  private readonly cardWorkspaceService: CardWorkspaceService;
   private readonly rescueService: RescueService;
   private readonly companionSignalsService: GetCompanionSignalsService;
   private readonly recoveryProjectionService: GetRecoveryProjectionService;
@@ -50,6 +60,7 @@ export class StudyServices {
     this.askService = new AskWordService(db, providerFactory);
     this.teachService = new TeachWordService(db, providerFactory);
     this.reviewService = new ReviewService(db);
+    this.cardWorkspaceService = new CardWorkspaceService(db);
     this.rescueService = new RescueService(db);
     this.companionSignalsService = new GetCompanionSignalsService(db);
     this.recoveryProjectionService = new GetRecoveryProjectionService(db);
@@ -105,6 +116,34 @@ export class StudyServices {
 
   gradeReviewCard(input: GradeReviewCardInput): GradeReviewCardResult {
     return this.reviewService.grade(input);
+  }
+
+  listStudyCards(input: ListStudyCardsInput = {}): ListStudyCardsResult {
+    return this.cardWorkspaceService.listCards(input);
+  }
+
+  createStudyCard(input: CreateStudyCardInput): StudyCardOperationResult {
+    return this.cardWorkspaceService.execute({ kind: "create", input });
+  }
+
+  updateStudyCard(input: UpdateStudyCardInput): StudyCardOperationResult {
+    return this.cardWorkspaceService.execute({ kind: "update", input });
+  }
+
+  setStudyCardLifecycle(
+    input: SetStudyCardLifecycleInput
+  ): StudyCardOperationResult {
+    return this.cardWorkspaceService.execute({ kind: "set-lifecycle", input });
+  }
+
+  deleteStudyCard(input: DeleteStudyCardInput): StudyCardOperationResult {
+    return this.cardWorkspaceService.execute({ kind: "delete", input });
+  }
+
+  executeStudyCardOperation(
+    input: StudyCardOperationInput
+  ): StudyCardOperationResult {
+    return this.cardWorkspaceService.execute(input);
   }
 
   getRescueCandidate(now?: string): RescueCandidateResult | null {

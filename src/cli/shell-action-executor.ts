@@ -5,22 +5,31 @@ import type {
   CaptureWordInput,
   CaptureWordResult,
   CompanionSignalsResult,
+  CreateStudyCardInput,
+  DeleteStudyCardInput,
   GetReviewQueueInput,
   GradeReviewCardInput,
   GradeReviewCardResult,
   HomeProjectionResult,
+  ListStudyCardsInput,
+  ListStudyCardsResult,
   LlmProviderName,
   RescueCandidateResult,
   ReviewQueueResult,
   ReviewRevealResult,
+  SetStudyCardLifecycleInput,
+  StudyCardOperationInput,
+  StudyCardOperationResult,
   TeachWordDraftOutcome,
   TeachWordDraftResult,
   TeachWordInput,
-  TeachWordResult
+  TeachWordResult,
+  UpdateStudyCardInput
 } from "../core/domain/models";
 import { loadCompanionPack, listCompanionPacks } from "../companion/packs";
 import { buildCompanionReaction } from "../companion/reaction-builder";
 import type {
+  CompanionDynamicTemplateBank,
   CompanionEvent,
   CompanionPackDefinition,
   CompanionPackSummary,
@@ -73,6 +82,7 @@ interface CompanionReactionOptions {
   frame?: number;
   packId?: string;
   status?: CompanionStatusSignals;
+  dynamicTemplates?: CompanionDynamicTemplateBank;
 }
 
 export class ShellActionExecutor {
@@ -140,6 +150,34 @@ export class ShellActionExecutor {
     return this.study.gradeReviewCard(input);
   }
 
+  listStudyCards(input: ListStudyCardsInput = {}): ListStudyCardsResult {
+    return this.study.listStudyCards(input);
+  }
+
+  createStudyCard(input: CreateStudyCardInput): StudyCardOperationResult {
+    return this.study.createStudyCard(input);
+  }
+
+  updateStudyCard(input: UpdateStudyCardInput): StudyCardOperationResult {
+    return this.study.updateStudyCard(input);
+  }
+
+  setStudyCardLifecycle(
+    input: SetStudyCardLifecycleInput
+  ): StudyCardOperationResult {
+    return this.study.setStudyCardLifecycle(input);
+  }
+
+  deleteStudyCard(input: DeleteStudyCardInput): StudyCardOperationResult {
+    return this.study.deleteStudyCard(input);
+  }
+
+  executeStudyCardOperation(
+    input: StudyCardOperationInput
+  ): StudyCardOperationResult {
+    return this.study.executeStudyCardOperation(input);
+  }
+
   getCompanionSignals(at?: string): CompanionSignalsResult {
     return this.study.getCompanionSignals(at);
   }
@@ -183,7 +221,8 @@ export class ShellActionExecutor {
         dueCount: status.dueCount,
         recentWord: status.recentWord
       },
-      options.frame ?? 0
+      options.frame ?? 0,
+      options.dynamicTemplates
     );
   }
 

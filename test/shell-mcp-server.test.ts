@@ -6,6 +6,48 @@ import fs from "node:fs";
 
 import { PawMemoShellMcpController } from "../src/cli/shell-mcp-server";
 
+test("PawMemoShellMcpController exposes MCP runtime freshness through a tool and resource", async () => {
+  const controller = new PawMemoShellMcpController({
+    defaultDbPath: ":memory:"
+  });
+
+  const status = await controller.callTool("server_status", {}) as {
+    processId: number;
+    server: {
+      name: string;
+    };
+    dist: {
+      rootPath: string;
+      latestPath: string | null;
+      changedSinceLaunch: boolean;
+    };
+    freshness: {
+      isStale: boolean;
+      hint: string;
+    };
+  };
+
+  assert.equal(status.server.name, "pawmemo-shell");
+  assert.equal(status.processId, process.pid);
+  assert.ok(status.dist.rootPath.includes(path.join("PawMemo", "dist")));
+  assert.equal(typeof status.dist.changedSinceLaunch, "boolean");
+  assert.equal(typeof status.freshness.isStale, "boolean");
+  assert.match(status.freshness.hint, /MCP process/i);
+
+  const resources = controller.listResources();
+  assert.ok(resources.some((resource) => resource.uri === "pawmemo://server"));
+
+  const resource = controller.readResource("pawmemo://server") as {
+    contents: Array<{
+      mimeType: string;
+      text: string;
+    }>;
+  };
+  assert.equal(resource.contents[0]?.mimeType, "application/json");
+  assert.match(resource.contents[0]?.text ?? "", /"processId":/);
+  assert.match(resource.contents[0]?.text ?? "", /"freshness":/);
+});
+
 test("PawMemoShellMcpController can start, snapshot, resize, and stop a shell session", async () => {
   const controller = new PawMemoShellMcpController({
     defaultDbPath: ":memory:"
@@ -30,7 +72,7 @@ test("PawMemoShellMcpController can start, snapshot, resize, and stop a shell se
   assert.match(started.sessionId, /-/);
   assert.equal(started.frame.viewport.columns, 72);
   assert.equal(started.frame.viewport.rows, 20);
-  assert.match(started.frame.rendered.frameText, /Study Nook/);
+  assert.match(started.frame.rendered.frameText, /starting fresh/i);
 
   const snapshot = await controller.callTool("shell_snapshot", {
     sessionId: started.sessionId
@@ -236,6 +278,65 @@ test("PawMemoShellMcpController waits cleanly for fast synchronous prompt cycles
   });
 });
 
+test("PawMemoShellMcpController clears stale footer error copy before the next study flow", async () => {
+  const controller = new PawMemoShellMcpController({
+    defaultDbPath: ":memory:"
+  });
+
+  const started = await controller.callTool("shell_start", {
+    columns: 100,
+    rows: 30
+  }) as {
+    sessionId: string;
+  };
+
+  await controller.callTool("shell_submit", {
+    sessionId: started.sessionId,
+    input: '/capture luminous --ctx "The jellyfish gave off a luminous glow." --gloss "emitting light"'
+  });
+
+  await controller.callTool("shell_submit", {
+    sessionId: started.sessionId,
+    input: "/models"
+  });
+
+  await controller.callTool("shell_key", {
+    sessionId: started.sessionId,
+    key: "submit",
+    waitForPrompt: true
+  });
+
+  const reviewOpened = await controller.callTool("shell_submit", {
+    sessionId: started.sessionId,
+    input: "/review"
+  }) as {
+    frame: {
+      composer: {
+        selectionPrompt: {
+          promptText: string;
+        } | null;
+      };
+      layout: {
+        footer: {
+          lines: string[];
+        };
+      };
+    };
+  };
+
+  assert.equal(reviewOpened.frame.composer.selectionPrompt?.promptText, "Ready to peek?");
+  assert.ok(
+    reviewOpened.frame.layout.footer.lines.every(
+      (line) => !/API key is missing|slipped|tripped/i.test(line)
+    ),
+    "expected the old /models error state to clear before the review flow begins"
+  );
+
+  await controller.callTool("shell_stop", {
+    sessionId: started.sessionId
+  });
+});
+
 test("PawMemoShellMcpController exposes wait, resource list, and resource read helpers", async () => {
   const controller = new PawMemoShellMcpController({
     defaultDbPath: ":memory:"
@@ -306,7 +407,7 @@ test("PawMemoShellMcpController exposes wait, resource list, and resource read h
     }>;
   };
   assert.equal(frameResource.contents[0]?.mimeType, "text/plain");
-  assert.match(frameResource.contents[0]?.text ?? "", /Study Nook/);
+  assert.match(frameResource.contents[0]?.text ?? "", /starting fresh/i);
 
   const imageResource = controller.readResource(
     `pawmemo://sessions/${started.sessionId}/snapshots/latest/frame.png`

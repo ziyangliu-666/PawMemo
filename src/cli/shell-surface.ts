@@ -414,6 +414,7 @@ export class TuiShellSurface extends BaseShellSurface {
   private readonly inputMode: "terminal" | "external-prompt" | "external-composer";
   private promptArmed = false;
   private promptEpoch = 0;
+  private pendingPromptDisplayReset = false;
 
   setMode(mode: string, dueCount?: number): void {
     this.shellMode = mode;
@@ -919,6 +920,11 @@ export class TuiShellSurface extends BaseShellSurface {
     this.renderFrame();
   }
 
+  refreshCompanionPresence(text: string): void {
+    this.activeCompanionLine = text;
+    this.renderFrame();
+  }
+
   beginAssistantReplyStream(): void {
     this.clearWaitingIndicator();
     this.transcript.beginActiveAssistantCell();
@@ -1022,6 +1028,7 @@ export class TuiShellSurface extends BaseShellSurface {
   }
 
   protected async promptWithLabel(promptText: string): Promise<string> {
+    this.flushDeferredPromptDisplayReset();
     this.activePromptLabel = promptText;
     this.promptArmed = true;
     this.promptEpoch += 1;
@@ -1034,53 +1041,72 @@ export class TuiShellSurface extends BaseShellSurface {
       draftLength: this.composerBuffer.length
     });
     this.renderFrame();
+    let completed = false;
 
     try {
       if (this.canUseInlineComposer()) {
-        return await this.promptWithInlineComposer();
+        const submitted = await this.promptWithInlineComposer();
+        completed = true;
+        return submitted;
       }
 
-      return await this.terminal.prompt("");
+      const submitted = await this.terminal.prompt("");
+      completed = true;
+      return submitted;
     } finally {
-      this.activePromptLabel = DEFAULT_SHELL_PROMPT;
       this.promptRejecter = null;
-      this.promptArmed = false;
-      this.renderFrame();
+      if (completed) {
+        this.pendingPromptDisplayReset = true;
+      } else {
+        this.flushPromptDisplayResetNow();
+        this.renderFrame();
+      }
     }
   }
 
   private async promptWithSelection(
     request: PromptSelectionRequest
   ): Promise<string> {
+    this.flushDeferredPromptDisplayReset();
     this.activePromptLabel = request.promptText;
     this.promptArmed = true;
     this.promptEpoch += 1;
     this.composerBuffer = "";
     this.composerCursor = 0;
-    this.renderFrame();
+    let completed = false;
 
     try {
       if (this.canUseInlineComposer()) {
-        return await new Promise<string>((resolve, reject) => {
+        this.activeSelectionPrompt = {
+          request,
+          selectedIndex: this.resolveInitialSelectionIndex(request),
+          resolve: () => {}
+        };
+        const selected = await new Promise<string>((resolve, reject) => {
           this.promptRejecter = reject;
-          this.activeSelectionPrompt = {
-            request,
-            selectedIndex: this.resolveInitialSelectionIndex(request),
-            resolve
-          };
+          if (this.activeSelectionPrompt) {
+            this.activeSelectionPrompt.resolve = resolve;
+          }
           this.renderFrame();
         });
+        completed = true;
+        return selected;
       }
 
-      return await this.terminal.prompt(
+      this.renderFrame();
+      const selected = await this.terminal.prompt(
         this.theme.prompt(formatPromptSelectionPrompt(request))
       );
+      completed = true;
+      return selected;
     } finally {
-      this.activeSelectionPrompt = null;
-      this.activePromptLabel = DEFAULT_SHELL_PROMPT;
       this.promptRejecter = null;
-      this.promptArmed = false;
-      this.renderFrame();
+      if (completed) {
+        this.pendingPromptDisplayReset = true;
+      } else {
+        this.flushPromptDisplayResetNow();
+        this.renderFrame();
+      }
     }
   }
 
@@ -1171,8 +1197,22 @@ export class TuiShellSurface extends BaseShellSurface {
       return;
     }
 
-    this.activeSelectionPrompt = null;
     prompt.resolve(choice.value);
+  }
+
+  private flushDeferredPromptDisplayReset(): void {
+    if (!this.pendingPromptDisplayReset) {
+      return;
+    }
+
+    this.flushPromptDisplayResetNow();
+  }
+
+  private flushPromptDisplayResetNow(): void {
+    this.activeSelectionPrompt = null;
+    this.activePromptLabel = DEFAULT_SHELL_PROMPT;
+    this.promptArmed = false;
+    this.pendingPromptDisplayReset = false;
   }
 
   private commitPromptSubmission(): boolean {
@@ -1497,6 +1537,7 @@ export class TuiShellSurface extends BaseShellSurface {
       return;
     }
 
+    this.flushDeferredPromptDisplayReset();
     const snapshot = this.composeFrameSnapshot();
     const frame = snapshot.rendered.styledLines.join("\n");
     const cursorSequence = snapshot.rendered.cursor

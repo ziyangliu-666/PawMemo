@@ -95,6 +95,27 @@ export function formatReviewReveal(result: ReviewRevealResult): string {
   ].join("\n");
 }
 
+export function formatStudyCardWorkspace(cards: DueReviewCard[]): string {
+  if (cards.length === 0) {
+    return "Cards\nNo cards matched that view.";
+  }
+
+  const lines = [
+    "Cards",
+    `Count: ${cards.length}`
+  ];
+
+  for (const card of cards) {
+    lines.push(
+      `#${card.id} ${card.lemma} · ${card.cardType} · ${card.lifecycleState} · ${card.state}`
+    );
+    lines.push(`Prompt: ${card.promptText}`);
+    lines.push(`Answer: ${card.answerText}`);
+  }
+
+  return lines.join("\n");
+}
+
 function formatOverdueLabel(result: RescueCandidateResult): string {
   if (result.overdueDays >= 1) {
     return `${result.overdueDays} day${result.overdueDays === 1 ? "" : "s"}`;

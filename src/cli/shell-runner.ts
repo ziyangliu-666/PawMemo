@@ -3,6 +3,7 @@ import {
   renderCompanionPresenceLine
 } from "../companion/presenter";
 import type {
+  CompanionDynamicTemplateBank,
   CompanionMood,
   CompanionEvent,
   CompanionPackDefinition,
@@ -12,16 +13,20 @@ import type {
   AskWordInput,
   CaptureWordInput,
   LlmProviderName,
+  ReviewCardType,
+  StudyCardOperationResult,
+  StudyCardSelector,
   TeachWordDraftOutcome,
   TeachWordDraftResult,
   TeachWordInput
 } from "../core/domain/models";
 import type { LlmProvider } from "../llm/types";
-import { UsageError } from "../lib/errors";
+import { CardSelectionError, ConfigurationError, UsageError } from "../lib/errors";
 import type { SqliteDatabase } from "../storage/sqlite/database";
 import {
   formatNextReviewCard,
-  formatReviewReveal
+  formatReviewReveal,
+  formatStudyCardWorkspace
 } from "./format";
 import {
   formatPromptSelectionPrompt,
@@ -31,8 +36,11 @@ import {
 import {
   createShellReviewSessionCopy,
   presentShellAskResult,
+  presentShellCardListResult,
+  presentShellCardMutationResult,
   presentShellCaptureResult,
   presentShellError,
+  presentShellPlannerSetupGuidance,
   presentShellNoRescueCandidate,
   presentShellRescueIntro,
   presentShellReviewIntro,
@@ -78,6 +86,7 @@ import {
   writeShellPerf,
   type ShellDebugField
 } from "./shell-debug";
+import { LlmShellCompanionVoiceWriter } from "./shell-companion-voice";
 
 export interface ShellRunnerOptions {
   db: SqliteDatabase;
@@ -95,6 +104,26 @@ interface ShellState {
 }
 
 const SHELL_WAIT_DELAY_MS = 180;
+
+function parseReviewCardType(
+  rawValue: string | undefined,
+  message = "Card type must be one of recognition, cloze, usage, or contrast."
+): ReviewCardType | undefined {
+  if (!rawValue) {
+    return undefined;
+  }
+
+  if (
+    rawValue === "recognition" ||
+    rawValue === "cloze" ||
+    rawValue === "usage" ||
+    rawValue === "contrast"
+  ) {
+    return rawValue;
+  }
+
+  throw new UsageError(message);
+}
 
 function parsePositiveId(rawValue: string | undefined, message: string): number {
   const value = Number.parseInt(rawValue ?? "", 10);
@@ -120,6 +149,33 @@ function parseOptionalLimit(rawValue: string | undefined): number | undefined {
   return limit;
 }
 
+function parseStudyCardSelectorToken(
+  rawValue: string | undefined,
+  message: string
+): StudyCardSelector {
+  if (!rawValue?.trim()) {
+    throw new UsageError(message);
+  }
+
+  if (/^[1-9]\d*$/.test(rawValue.trim())) {
+    return {
+      cardId: Number.parseInt(rawValue.trim(), 10)
+    };
+  }
+
+  const [wordPart, cardTypePart] = rawValue.split(":", 2);
+  const word = wordPart?.trim();
+
+  if (!word) {
+    throw new UsageError(message);
+  }
+
+  return {
+    word,
+    cardType: parseReviewCardType(cardTypePart?.trim())
+  };
+}
+
 export class ShellRunner {
   private readonly surface: ShellSurface;
   private readonly conversationAgent: ShellConversationAgent;
@@ -128,12 +184,15 @@ export class ShellRunner {
   private readonly controlCommands: ShellControlCommands;
   private readonly startupCoordinator = new ShellStartupCoordinator();
   private readonly teachFlow = new ShellTeachFlowCoordinator();
+  private readonly companionVoiceWriter: LlmShellCompanionVoiceWriter;
   private readonly activePack: CompanionPackDefinition;
   private readonly debugEnabled: boolean;
   private readonly shellState: ShellState = {
     mood: "idle",
     frame: 0
   };
+  private companionVoiceTemplates: CompanionDynamicTemplateBank = {};
+  private companionVoiceRefreshVersion = 0;
   private plannerMessageStreamStarted = false;
 
   constructor(options: ShellRunnerOptions) {
@@ -142,6 +201,10 @@ export class ShellRunner {
     this.executor = new ShellActionExecutor(options.db, options.providerFactory);
     this.debugEnabled = options.debug ?? false;
     this.activePack = this.executor.getActiveCompanionPack(options.packId);
+    this.companionVoiceWriter = new LlmShellCompanionVoiceWriter(
+      this.executor,
+      options.providerFactory
+    );
     this.controlCommands = new ShellControlCommands({
       executor: this.executor,
       sessionState: this.sessionState,
@@ -161,6 +224,7 @@ export class ShellRunner {
   async run(): Promise<void> {
     this.surface.beginShell(this.activePack.displayName);
     this.presentStartupEntry();
+    this.scheduleCompanionVoiceRefresh("startup");
     writeShellDebug(this.surface, this.debugEnabled, "shell start", {
       pack: this.activePack.id,
       surface: this.surface.constructor.name,
@@ -188,6 +252,7 @@ export class ShellRunner {
           continue;
         }
 
+        this.refreshTuiCompanionPresence();
         const turnStartedAt = performance.now();
         let turnOutcome = "ok";
         let shouldExit = false;
@@ -250,6 +315,9 @@ export class ShellRunner {
 
           turnOutcome = "error";
           this.resetPlannerMessageStream(false);
+          if (this.maybeHandleMissingModelGuidance(rawInput, error)) {
+            continue;
+          }
           this.applyReaction({
             type: "command_error",
             errorMessage:
@@ -387,7 +455,8 @@ export class ShellRunner {
               {
                 frame: this.shellState.frame,
                 packId: this.activePack.id,
-                status: this.getStatusSignals()
+                status: this.getStatusSignals(),
+                dynamicTemplates: this.companionVoiceTemplates
               }
             );
             this.surface.renderCompanionLine(reaction.lineOverride ?? "See you soon.");
@@ -417,6 +486,21 @@ export class ShellRunner {
           case "capture":
             this.runCaptureInput(action.input);
             return false;
+          case "study-card-list":
+            this.runStudyCardList(action.input.word, action.input.cardType);
+            return false;
+          case "study-card-create":
+            this.runStudyCardCreate(action.input);
+            return false;
+          case "study-card-update":
+            this.runStudyCardUpdate(action.input);
+            return false;
+          case "study-card-set-lifecycle":
+            this.runStudyCardLifecycle(action.input);
+            return false;
+          case "study-card-delete":
+            this.runStudyCardDelete(action.input.selector);
+            return false;
           case "teach-clarify-context":
             await this.runTeachClarification(action.input);
             return false;
@@ -440,6 +524,15 @@ export class ShellRunner {
 
   private renderCompanion(): void {
     const status = this.getStatusSignals();
+    const snapshotReaction = this.executor.buildCompanionReaction(
+      { type: "status_snapshot" },
+      {
+        frame: this.shellState.frame,
+        packId: this.activePack.id,
+        status,
+        dynamicTemplates: this.companionVoiceTemplates
+      }
+    );
     this.surface.setMode?.("Chat", status.dueCount);
     this.surface.renderCompanionLine(
       renderCompanionPresenceLine(this.activePack, {
@@ -447,17 +540,42 @@ export class ShellRunner {
         frame: this.shellState.frame,
         dueCount: status.dueCount,
         recentWord: status.recentWord,
-        lineOverride: this.shellState.lineOverride
+        lineOverride: this.shellState.lineOverride ?? snapshotReaction.lineOverride
       })
     );
     this.shellState.frame += 1;
     this.shellState.lineOverride = undefined;
   }
 
+  private refreshTuiCompanionPresence(): void {
+    const status = this.getStatusSignals();
+    const reaction = this.executor.buildCompanionReaction(
+      { type: "status_snapshot" },
+      {
+        frame: this.shellState.frame,
+        packId: this.activePack.id,
+        status,
+        dynamicTemplates: this.companionVoiceTemplates
+      }
+    );
+    this.shellState.mood = reaction.mood;
+    this.surface.setMode?.("Chat", status.dueCount);
+    this.surface.refreshCompanionPresence?.(
+      renderCompanionPresenceLine(this.activePack, {
+        mood: reaction.mood,
+        frame: this.shellState.frame,
+        dueCount: status.dueCount,
+        recentWord: status.recentWord
+      })
+    );
+  }
+
   private presentStartupEntry(): void {
     const summary = this.executor.getCompanionSignals();
     const home = this.executor.getHomeProjection();
-    const entry = this.startupCoordinator.createEntry(summary, home);
+    const entry = this.startupCoordinator.createEntry(summary, home, {
+      hasUsableProviderApiKey: this.executor.hasAnyUsableProviderApiKey()
+    });
 
     this.shellState.mood = entry.mood;
     this.startupCoordinator.renderEntry(this.surface, entry);
@@ -484,11 +602,38 @@ export class ShellRunner {
       {
         frame: this.shellState.frame,
         packId: this.activePack.id,
-        status: this.getStatusSignals()
+        status: this.getStatusSignals(),
+        dynamicTemplates: this.companionVoiceTemplates
       }
     );
     this.shellState.mood = reaction.mood;
     this.shellState.lineOverride = reaction.lineOverride;
+  }
+
+  private maybeHandleMissingModelGuidance(
+    rawInput: string,
+    error: unknown
+  ): boolean {
+    if (rawInput.startsWith("/")) {
+      return false;
+    }
+
+    if (!(error instanceof ConfigurationError) || !/API key is missing/i.test(error.message)) {
+      return false;
+    }
+
+    const home = this.executor.getHomeProjection();
+    const natural = presentShellPlannerSetupGuidance(home, {
+      hasAnyUsableProviderApiKey: this.executor.hasAnyUsableProviderApiKey()
+    });
+
+    this.shellState.mood = home.entryKind === "capture" ? "curious" : "studying";
+    this.shellState.lineOverride = home.focusWord
+      ? `${home.focusWord} can still move while chat wakes up.`
+      : "One tiny word is enough to get started.";
+    this.sessionState.recordError(natural);
+    this.writeAssistantReplyNow(natural);
+    return true;
   }
 
   private renderTransientCompanion(event: CompanionEvent): void {
@@ -498,7 +643,8 @@ export class ShellRunner {
       {
         frame: this.shellState.frame,
         packId: this.activePack.id,
-        status
+        status,
+        dynamicTemplates: this.companionVoiceTemplates
       }
     );
     this.surface.showWaitingIndicator(
@@ -565,6 +711,48 @@ export class ShellRunner {
     }
   }
 
+  private scheduleCompanionVoiceRefresh(trigger: string): void {
+    if (!this.executor.hasAnyUsableProviderApiKey()) {
+      return;
+    }
+
+    const refreshVersion = ++this.companionVoiceRefreshVersion;
+    const status = this.getStatusSignals();
+    const home = this.executor.getHomeProjection();
+    const recentTurns = this.sessionState
+      .listRecentTurns(4)
+      .map((turn) => `${turn.speaker}/${turn.kind}: ${turn.contentText}`);
+
+    void this.companionVoiceWriter
+      .generate({
+        activePack: this.activePack,
+        statusSignals: status,
+        homeProjection: home,
+        recentTurns
+      })
+      .then((templates) => {
+        if (
+          refreshVersion !== this.companionVoiceRefreshVersion ||
+          Object.keys(templates).length === 0
+        ) {
+          return;
+        }
+
+        this.companionVoiceTemplates = templates;
+        writeShellDebug(this.surface, this.debugEnabled, "companion voice bank", {
+          trigger,
+          keys: Object.keys(templates).join(",") || "none"
+        });
+        this.refreshTuiCompanionPresence();
+      })
+      .catch((error) => {
+        writeShellDebug(this.surface, this.debugEnabled, "companion voice bank", {
+          trigger,
+          error: error instanceof Error ? error.message : "unknown"
+        });
+      });
+  }
+
   private async handleCommand(
     command: ReturnType<typeof parseCommand>
   ): Promise<void> {
@@ -593,6 +781,9 @@ export class ShellRunner {
         return;
       case "stats":
         this.runStats();
+        return;
+      case "cards":
+        this.runCards(command);
         return;
       case "rescue":
         await this.runRescue();
@@ -672,6 +863,213 @@ export class ShellRunner {
     });
   }
 
+  private runCards(command: ReturnType<typeof parseCommand>): void {
+    const subcommand = command.args[0];
+
+    switch (subcommand) {
+      case undefined:
+        this.runStudyCardList();
+        return;
+      case "show":
+      case "list":
+        this.runStudyCardList(command.args[1], parseReviewCardType(command.flags.type));
+        return;
+      case "create": {
+        const word = command.args[1];
+        const cardType = parseReviewCardType(
+          command.args[2],
+          "`/cards create` requires a card type: recognition, cloze, usage, or contrast."
+        );
+
+        if (!word?.trim()) {
+          throw new UsageError("`/cards create` requires a word.");
+        }
+
+        if (!cardType) {
+          throw new UsageError(
+            "`/cards create` requires a card type: recognition, cloze, usage, or contrast."
+          );
+        }
+
+        this.runStudyCardCreate({
+          word,
+          cardType,
+          promptText: command.flags.prompt,
+          answerText: command.flags.answer
+        });
+        return;
+      }
+      case "update": {
+        const selector = parseStudyCardSelectorToken(
+          command.args[1],
+          "`/cards update` requires a card id or word[:cardType]."
+        );
+        this.runStudyCardUpdate({
+          selector,
+          promptText: command.flags.prompt,
+          answerText: command.flags.answer
+        });
+        return;
+      }
+      case "pause":
+        this.runStudyCardLifecycle({
+          selector: parseStudyCardSelectorToken(
+            command.args[1],
+            "`/cards pause` requires a card id or word[:cardType]."
+          ),
+          lifecycleState: "paused"
+        });
+        return;
+      case "resume":
+        this.runStudyCardLifecycle({
+          selector: parseStudyCardSelectorToken(
+            command.args[1],
+            "`/cards resume` requires a card id or word[:cardType]."
+          ),
+          lifecycleState: "active"
+        });
+        return;
+      case "archive":
+        this.runStudyCardLifecycle({
+          selector: parseStudyCardSelectorToken(
+            command.args[1],
+            "`/cards archive` requires a card id or word[:cardType]."
+          ),
+          lifecycleState: "archived"
+        });
+        return;
+      case "delete":
+        this.runStudyCardDelete(
+          parseStudyCardSelectorToken(
+            command.args[1],
+            "`/cards delete` requires a card id or word[:cardType]."
+          )
+        );
+        return;
+      default:
+        this.runStudyCardList(subcommand, parseReviewCardType(command.flags.type));
+    }
+  }
+
+  private runStudyCardList(word?: string, cardType?: ReviewCardType): void {
+    const result = this.executor.listStudyCards({
+      word,
+      cardType,
+      lifecycleStates: ["active", "paused", "archived"],
+      limit: 20
+    });
+    const natural = presentShellCardListResult(result.cards, word);
+    this.writeAssistantReplyNow(natural);
+    this.writeDataBlock(formatStudyCardWorkspace(result.cards), "card-workspace");
+    this.sessionState.recordActionResult(
+      natural,
+      JSON.stringify({
+        type: "study-card-list",
+        word: word ?? null,
+        cardType: cardType ?? null,
+        count: result.cards.length
+      })
+    );
+  }
+
+  private runStudyCardCreate(input: {
+    word: string;
+    cardType: ReviewCardType;
+    promptText?: string;
+    answerText?: string;
+  }): void {
+    const result = this.executor.createStudyCard({
+      word: input.word,
+      cardType: input.cardType,
+      promptText: input.promptText ?? "",
+      answerText: input.answerText ?? ""
+    });
+    this.publishStudyCardMutation("create", result);
+    this.scheduleCompanionVoiceRefresh("study-card-create");
+  }
+
+  private runStudyCardUpdate(input: {
+    selector: StudyCardSelector;
+    promptText?: string;
+    answerText?: string;
+  }): void {
+    try {
+      const result = this.executor.updateStudyCard(input);
+      this.publishStudyCardMutation("update", result);
+      this.scheduleCompanionVoiceRefresh("study-card-update");
+    } catch (error) {
+      this.handleStudyCardSelectionError(error);
+    }
+  }
+
+  private runStudyCardLifecycle(input: {
+    selector: StudyCardSelector;
+    lifecycleState: "active" | "paused" | "archived";
+  }): void {
+    try {
+      const result = this.executor.setStudyCardLifecycle(input);
+      const operation =
+        input.lifecycleState === "paused"
+          ? "pause"
+          : input.lifecycleState === "archived"
+            ? "archive"
+            : "resume";
+      this.publishStudyCardMutation(operation, result);
+      this.scheduleCompanionVoiceRefresh(`study-card-${operation}`);
+    } catch (error) {
+      this.handleStudyCardSelectionError(error);
+    }
+  }
+
+  private runStudyCardDelete(selector: StudyCardSelector): void {
+    try {
+      const result = this.executor.deleteStudyCard({ selector });
+      this.publishStudyCardMutation("delete", result);
+      this.scheduleCompanionVoiceRefresh("study-card-delete");
+    } catch (error) {
+      this.handleStudyCardSelectionError(error);
+    }
+  }
+
+  private publishStudyCardMutation(
+    operation: "create" | "update" | "pause" | "resume" | "archive" | "delete",
+    result: StudyCardOperationResult
+  ): void {
+    if (result.kind === "list") {
+      return;
+    }
+
+    const natural = presentShellCardMutationResult({
+      operation,
+      card: result.card
+    });
+    this.writeAssistantReplyNow(natural);
+    this.sessionState.recordActionResult(
+      natural,
+      JSON.stringify({
+        type: `study-card-${operation}`,
+        cardId: result.card.id,
+        word: result.card.lemma,
+        cardType: result.card.cardType,
+        lifecycleState: result.card.lifecycleState
+      })
+    );
+  }
+
+  private handleStudyCardSelectionError(error: unknown): void {
+    if (!(error instanceof CardSelectionError)) {
+      throw error;
+    }
+
+    const natural = presentShellError(error);
+    this.writeAssistantReplyNow(natural);
+    this.writeDataBlock(
+      formatStudyCardWorkspace(error.candidates),
+      "card-workspace"
+    );
+    this.sessionState.recordError(natural);
+  }
+
   private runStats(): void {
     const summary = this.executor.getCompanionSignals();
     const home = this.executor.getHomeProjection();
@@ -693,6 +1091,7 @@ export class ShellRunner {
       reviewedLast7Days: summary.reviewedLast7Days,
       stableCount: summary.masteryBreakdown.stable
     });
+    this.scheduleCompanionVoiceRefresh("stats");
   }
 
   private async runReview(command: ReturnType<typeof parseCommand>): Promise<void> {
@@ -714,6 +1113,7 @@ export class ShellRunner {
             })
           );
           this.applyReaction({ type: "review_session_empty" });
+          this.scheduleCompanionVoiceRefresh("review-empty");
           return;
         }
 
@@ -747,6 +1147,7 @@ export class ShellRunner {
             reviewSession.returnAfterGap
           )
         );
+        this.scheduleCompanionVoiceRefresh("review-complete");
         return;
       }
       case "next": {
@@ -824,7 +1225,8 @@ export class ShellRunner {
       {
         frame: this.shellState.frame,
         packId: this.activePack.id,
-        status
+        status,
+        dynamicTemplates: this.companionVoiceTemplates
       }
     );
     this.shellState.mood = introEvent.mood;
@@ -870,6 +1272,7 @@ export class ShellRunner {
             reviewedCount: rescueSession.result.reviewedCount
           }
     );
+    this.scheduleCompanionVoiceRefresh("rescue");
   }
 
   private async readShellSelection(
@@ -1014,6 +1417,7 @@ export class ShellRunner {
       type: "capture_success",
       word: result.lexeme.lemma
     });
+    this.scheduleCompanionVoiceRefresh("capture");
     writeShellPerf(
       this.surface,
       this.debugEnabled,
@@ -1099,6 +1503,7 @@ export class ShellRunner {
       type: "teach_success",
       word: result.ask.word
     });
+    this.scheduleCompanionVoiceRefresh("teach");
   }
 
   private async runTeachDraftConfirmation(
@@ -1134,6 +1539,7 @@ export class ShellRunner {
       type: "teach_success",
       word: result.ask.word
     });
+    this.scheduleCompanionVoiceRefresh("teach-confirm");
   }
 
   private writeShellError(error: unknown): void {

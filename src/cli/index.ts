@@ -44,6 +44,10 @@ import { ShellRunner } from "./shell-runner";
 import { ReadlineShellTerminal, TuiShellSurface } from "./shell-surface";
 import { ShellActionExecutor } from "./shell-action-executor";
 import { runShellMcpServer } from "./shell-mcp-server";
+import {
+  isShellMcpWorkerProcess,
+  runShellMcpSupervisor
+} from "./shell-mcp-supervisor";
 import { openDatabase } from "../storage/sqlite/database";
 import { isLlmProviderName } from "../llm/provider-factory";
 
@@ -534,7 +538,14 @@ async function runMcp(command: ParsedCommand): Promise<void> {
     throw new UsageError("`mcp` currently supports only the shell harness.");
   }
 
-  await runShellMcpServer({
+  if (isShellMcpWorkerProcess()) {
+    await runShellMcpServer({
+      defaultDbPath: command.flags.db
+    });
+    return;
+  }
+
+  await runShellMcpSupervisor({
     defaultDbPath: command.flags.db
   });
 }

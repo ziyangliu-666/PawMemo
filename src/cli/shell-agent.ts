@@ -216,6 +216,51 @@ export class ShellConversationAgent {
           },
           nextPendingProposal: null
         };
+      case "card-list":
+        return {
+          response: {
+            kind: "execute",
+            action: { kind: "study-card-list", input: planned.input },
+            source: "planner"
+          },
+          nextPendingProposal: null
+        };
+      case "card-create":
+        return {
+          response: {
+            kind: "execute",
+            action: { kind: "study-card-create", input: planned.input },
+            source: "planner"
+          },
+          nextPendingProposal: null
+        };
+      case "card-update":
+        return {
+          response: {
+            kind: "execute",
+            action: { kind: "study-card-update", input: planned.input },
+            source: "planner"
+          },
+          nextPendingProposal: null
+        };
+      case "card-set-lifecycle":
+        return {
+          response: {
+            kind: "execute",
+            action: { kind: "study-card-set-lifecycle", input: planned.input },
+            source: "planner"
+          },
+          nextPendingProposal: null
+        };
+      case "card-delete":
+        return {
+          response: {
+            kind: "execute",
+            action: { kind: "study-card-delete", input: planned.input },
+            source: "planner"
+          },
+          nextPendingProposal: null
+        };
       case "teach": {
         const proposal = buildTeachProposal(
           planned.input,

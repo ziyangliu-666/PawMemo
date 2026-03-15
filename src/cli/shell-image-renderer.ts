@@ -392,6 +392,12 @@ function parseStyledLineToCells(
         index += match[0].length;
         continue;
       }
+
+      const csiLength = readNonSgrCsiSequenceLength(line, index);
+      if (csiLength > 0) {
+        index += csiLength;
+        continue;
+      }
     }
 
     const remaining = line.slice(index);
@@ -426,6 +432,25 @@ function parseStyledLineToCells(
   }
 
   return cells;
+}
+
+function readNonSgrCsiSequenceLength(line: string, startIndex: number): number {
+  if (line[startIndex] !== "\u001b" || line[startIndex + 1] !== "[") {
+    return 0;
+  }
+
+  let index = startIndex + 2;
+  while (index < line.length) {
+    const code = line.charCodeAt(index);
+
+    if (code >= 0x40 && code <= 0x7e) {
+      return index - startIndex + 1;
+    }
+
+    index += 1;
+  }
+
+  return line.length - startIndex;
 }
 
 function writePixel(

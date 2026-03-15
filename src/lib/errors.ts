@@ -1,3 +1,5 @@
+import type { DueReviewCard } from "../core/domain/models";
+
 export class UsageError extends Error {
   constructor(message: string) {
     super(message);
@@ -16,6 +18,17 @@ export class NotFoundError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "NotFoundError";
+  }
+}
+
+export class CardSelectionError extends Error {
+  constructor(
+    message: string,
+    readonly selector: string,
+    readonly candidates: DueReviewCard[] = []
+  ) {
+    super(message);
+    this.name = "CardSelectionError";
   }
 }
 

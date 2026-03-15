@@ -20,6 +20,32 @@ function describeAction(action: ShellAction): string {
       return `Explain ${action.input.word}`;
     case "capture":
       return `Save ${action.input.word} with an explicit gloss`;
+    case "study-card-list":
+      return action.input.word
+        ? `Inspect cards for ${action.input.word}`
+        : "Inspect cards";
+    case "study-card-create":
+      return `Add a ${action.input.cardType} card for ${action.input.word}`;
+    case "study-card-update":
+      return action.input.selector.cardId
+        ? `Update card #${action.input.selector.cardId}`
+        : `Update a card for ${action.input.selector.word ?? "that word"}`;
+    case "study-card-set-lifecycle": {
+      const target = action.input.selector.cardId
+        ? `card #${action.input.selector.cardId}`
+        : `a card for ${action.input.selector.word ?? "that word"}`;
+      const verb =
+        action.input.lifecycleState === "paused"
+          ? "Pause"
+          : action.input.lifecycleState === "archived"
+            ? "Archive"
+            : "Resume";
+      return `${verb} ${target}`;
+    }
+    case "study-card-delete":
+      return action.input.selector.cardId
+        ? `Delete card #${action.input.selector.cardId}`
+        : `Delete a card for ${action.input.selector.word ?? "that word"}`;
     case "teach-clarify-context":
       return `Clarify how to build a card for ${action.input.word}`;
     case "teach":

@@ -28,6 +28,20 @@ function mapSense(row: Record<string, unknown>): WordSenseRecord {
 export class LexemeRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
+  findByNormalized(normalized: string): LexemeRecord | null {
+    const row = this.db
+      .prepare(
+        `
+          SELECT id, lemma, normalized, created_at, updated_at
+          FROM lexemes
+          WHERE normalized = ?
+        `
+      )
+      .get(normalized) as Record<string, unknown> | undefined;
+
+    return row ? mapLexeme(row) : null;
+  }
+
   upsert(lemma: string, normalized: string, timestamp: string): LexemeRecord {
     this.db.prepare(
       `

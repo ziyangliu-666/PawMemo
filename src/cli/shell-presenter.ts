@@ -2,6 +2,7 @@ import type {
   AskWordResult,
   CaptureWordResult,
   CompanionSignalsResult,
+  DueReviewCard,
   HomeProjectionResult,
   RescueCandidateResult,
   StatsSummaryResult,
@@ -13,6 +14,7 @@ import type {
 } from "./review-session-runner";
 import type { ReturnAfterGapSummary } from "./review-session-feedback";
 import {
+  CardSelectionError,
   CardAuthorContractError,
   ConfigurationError,
   DuplicateEncounterError,
@@ -22,6 +24,10 @@ import {
   ReviewCardNotDueError,
   UsageError
 } from "../lib/errors";
+
+export interface ShellStartupIntroOptions {
+  hasUsableProviderApiKey?: boolean;
+}
 
 function quote(word: string): string {
   return `"${word}"`;
@@ -87,10 +93,55 @@ export function presentShellTeachResult(result: TeachWordResult): string {
   ]);
 }
 
+export function presentShellCardListResult(cards: DueReviewCard[], word?: string): string {
+  if (cards.length === 0) {
+    return word
+      ? `I couldn't find any cards for ${quote(word)} just now.`
+      : "I couldn't find any cards in that view just now.";
+  }
+
+  if (word) {
+    return sentence([
+      `I found ${cardCountLabel(cards.length)} for ${quote(word)}`,
+      "I'll keep the list compact"
+    ]);
+  }
+
+  return sentence([
+    `I found ${cardCountLabel(cards.length)} in the workspace`,
+    "I'll keep the list compact"
+  ]);
+}
+
+export function presentShellCardMutationResult(options: {
+  operation: "create" | "update" | "pause" | "resume" | "archive" | "delete";
+  card: DueReviewCard;
+}): string {
+  const target = `card #${options.card.id} for ${quote(options.card.lemma)}`;
+
+  switch (options.operation) {
+    case "create":
+      return `I added ${target}.`;
+    case "update":
+      return `I updated ${target}.`;
+    case "pause":
+      return `I paused ${target}.`;
+    case "resume":
+      return `I put ${target} back into the active pile.`;
+    case "archive":
+      return `I archived ${target}.`;
+    case "delete":
+      return `I deleted ${target}.`;
+  }
+}
+
 export function presentShellStartupIntro(
   summary: CompanionSignalsResult,
-  home: HomeProjectionResult
+  home: HomeProjectionResult,
+  options: ShellStartupIntroOptions = {}
 ): string | null {
+  const hasUsableProviderApiKey = options.hasUsableProviderApiKey ?? false;
+
   switch (home.entryKind) {
     case "return_rescue":
       return sentence([
@@ -129,7 +180,61 @@ export function presentShellStartupIntro(
         "One short review lap would be enough"
       ]);
     case "capture":
-      return null;
+      return hasUsableProviderApiKey
+        ? sentence([
+            "You're starting fresh, so one tiny word is enough",
+            "Save one with `/capture ...`, or open `/help` if you want a quick tour"
+          ])
+        : sentence([
+            "You're starting fresh, and one tiny word is enough",
+            "Save one with `/capture ...`, or open `/help` if you want a quick tour",
+            "When you want free chat, ask, and teach, wake them up with `/models`"
+          ]);
+  }
+}
+
+export function presentShellPlannerSetupGuidance(
+  home: HomeProjectionResult,
+  options: {
+    hasAnyUsableProviderApiKey?: boolean;
+  } = {}
+): string {
+  const hasAnyUsableProviderApiKey = options.hasAnyUsableProviderApiKey ?? false;
+  const setupLine = hasAnyUsableProviderApiKey
+    ? "Use `/models` if you want me to switch back onto a provider that already has a key."
+    : "Use `/models` when you want free chat, ask, and teach to wake up.";
+
+  switch (home.entryKind) {
+    case "return_rescue":
+    case "rescue":
+      return sentence([
+        home.focusWord
+          ? `${quote(home.focusWord)} is still the one I'd keep closest`
+          : "The fading card is still the one I'd keep closest",
+        "We can still use `/rescue`, `/review`, `/stats`, and `/pet` right now",
+        setupLine
+      ]);
+    case "return_review":
+    case "review":
+      return sentence([
+        `You still have ${cardCountLabel(home.dueCount)} waiting`,
+        "We can still use `/review`, `/stats`, and `/pet` right now",
+        setupLine
+      ]);
+    case "resume_recent":
+      return sentence([
+        home.focusWord
+          ? `${quote(home.focusWord)} is still close to hand`
+          : "Your study pile is still here",
+        "We can still use `/review`, `/stats`, `/capture`, and `/pet` right now",
+        setupLine
+      ]);
+    case "capture":
+      return sentence([
+        "I'm here, even before the live model is set up",
+        "Start with one word through `/capture ...`, or open `/help` for a quick tour",
+        setupLine
+      ]);
   }
 }
 
@@ -369,6 +474,10 @@ export function presentShellReviewSessionSummary(
 }
 
 export function presentShellError(error: unknown): string {
+  if (error instanceof CardSelectionError) {
+    return `I found more than one card for ${quote(error.selector)}. Pick a card id or name the card type.`;
+  }
+
   if (error instanceof ConfigurationError) {
     if (/API key is missing/i.test(error.message)) {
       return "I need a live model connection before I can handle natural chat. Check `/models`, or set a key with `/model key ...` and try again.";

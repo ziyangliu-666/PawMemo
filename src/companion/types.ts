@@ -30,6 +30,13 @@ export type CompanionReactionKey =
   | "idle_prompt"
   | "shell_exit";
 
+export type CompanionDynamicTemplateKey =
+  | "status_snapshot"
+  | CompanionReactionKey;
+
+export type CompanionDynamicTemplateBank =
+  Partial<Record<CompanionDynamicTemplateKey, string>>;
+
 export interface CompanionLineTemplateSet {
   default: string[];
   withRecentWord?: string[];

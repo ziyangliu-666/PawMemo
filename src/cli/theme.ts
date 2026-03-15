@@ -97,6 +97,7 @@ export type CliDataKind =
   | "grade-result"
   | "ask-result"
   | "teach-result"
+  | "card-workspace"
   | "stats"
   | "recovery"
   | "home"
@@ -193,6 +194,7 @@ export function createCliTheme(options: ThemeOptions): CliTheme {
       case "rescue":
       case "ask-result":
       case "teach-result":
+      case "card-workspace":
       case "recovery":
       case "home":
         return [

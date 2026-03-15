@@ -1,8 +1,13 @@
 import type {
   AskWordInput,
   CaptureWordInput,
+  CreateStudyCardInput,
+  DeleteStudyCardInput,
+  ListStudyCardsInput,
+  SetStudyCardLifecycleInput,
   TeachWordDraftResult,
-  TeachWordInput
+  TeachWordInput,
+  UpdateStudyCardInput
 } from "../core/domain/models";
 import type { CompanionMood } from "../companion/types";
 import { ConfigurationError } from "../lib/errors";
@@ -17,6 +22,11 @@ export type ShellAction =
   | { kind: "command"; rawInput: string }
   | { kind: "ask"; input: AskWordInput }
   | { kind: "capture"; input: CaptureWordInput }
+  | { kind: "study-card-list"; input: ListStudyCardsInput }
+  | { kind: "study-card-create"; input: CreateStudyCardInput }
+  | { kind: "study-card-update"; input: UpdateStudyCardInput }
+  | { kind: "study-card-set-lifecycle"; input: SetStudyCardLifecycleInput }
+  | { kind: "study-card-delete"; input: DeleteStudyCardInput }
   | { kind: "teach-clarify-context"; input: TeachWordInput }
   | { kind: "teach"; input: TeachWordInput }
   | { kind: "teach-confirm"; input: TeachWordInput; draft: TeachWordDraftResult };

@@ -105,3 +105,33 @@ test("buildCompanionReaction maps return-after-gap into a gap-aware pack-specifi
   assert.match(reaction.lineOverride ?? "", /11 day/i);
   assert.match(reaction.lineOverride ?? "", /2 cards/i);
 });
+
+test("buildCompanionReaction prefers dynamic voice-bank templates when present", () => {
+  const pack = loadCompanionPack("girlfriend");
+  const reaction = buildCompanionReaction(
+    pack,
+    {
+      type: "stats_summary",
+      todayReviewedCount: 4,
+      dueCount: 2,
+      capturedLast7Days: 3,
+      reviewedLast7Days: 9,
+      stableCount: 1
+    },
+    {
+      dueCount: 2,
+      recentWord: "lucid"
+    },
+    0,
+    {
+      stats_summary:
+        'I saw you move {{todayReviewedCount}} cards today, and {{stableCount}} word is finally settling.'
+    }
+  );
+
+  assert.equal(reaction.mood, "proud");
+  assert.equal(
+    reaction.lineOverride,
+    "I saw you move 4 cards today, and 1 word is finally settling."
+  );
+});

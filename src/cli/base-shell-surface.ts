@@ -36,6 +36,7 @@ export interface ShellSurface {
   ): void;
   renderCompanionCard(text: string): void;
   renderCompanionLine(text: string): void;
+  refreshCompanionPresence?(text: string): void;
   showWaitingIndicator(label: string, text: string): void;
   clearWaitingIndicator(): void;
   beginAssistantReplyStream(): void;
