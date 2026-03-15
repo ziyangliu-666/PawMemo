@@ -1,6 +1,7 @@
 import type {
   AskWordInput,
   CaptureWordInput,
+  HomeProjectionResult,
   LlmSettings,
   LlmProviderName,
   TeachWordInput
@@ -23,6 +24,7 @@ export interface ShellPlannerInput {
   recentTurns: ShellPlannerTurn[];
   activePack: CompanionPackDefinition;
   statusSignals: CompanionStatusSignals;
+  homeProjection: HomeProjectionResult;
   pendingProposalText?: string | null;
 }
 

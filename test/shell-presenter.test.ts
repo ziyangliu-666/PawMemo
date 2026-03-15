@@ -6,9 +6,11 @@ import {
 } from "../src/cli/format";
 import {
   presentShellReviewSessionSummary,
+  presentShellStartupIntro,
   presentShellStatsResult
 } from "../src/cli/shell-presenter";
 import type {
+  CompanionSignalsResult,
   HomeProjectionResult,
   StatsSummaryResult
 } from "../src/core/domain/models";
@@ -56,6 +58,56 @@ function home(
     ...overrides
   };
 }
+
+function signals(
+  overrides: Partial<CompanionSignalsResult> = {}
+): CompanionSignalsResult {
+  return {
+    ...summary(),
+    recentWord: "luminous",
+    stableCount: 0,
+    lastReviewedAt: "2026-03-01T09:00:00.000Z",
+    hoursSinceLastReview: 267,
+    daysSinceLastReview: 11,
+    ...overrides
+  };
+}
+
+test("presentShellStartupIntro turns return-rescue state into a startup nudge", () => {
+  const text = presentShellStartupIntro(signals(), home());
+
+  assert.match(text ?? "", /Welcome back after 11 days/i);
+  assert.match(text ?? "", /rescue "luminous" first/i);
+});
+
+test("presentShellStartupIntro stays silent for a first-run capture state", () => {
+  const text = presentShellStartupIntro(
+    signals({
+      dueCount: 0,
+      dueReviewCount: 0,
+      dueNewCount: 0,
+      recentWord: null,
+      lastReviewedAt: null,
+      hoursSinceLastReview: null,
+      daysSinceLastReview: null
+    }),
+    home({
+      dueCount: 0,
+      recentWord: null,
+      focusWord: null,
+      focusReason: null,
+      hasPriorReviewHistory: false,
+      isReturnAfterGap: false,
+      returnGapDays: null,
+      entryKind: "capture",
+      suggestedNextAction: "capture",
+      canStopAfterPrimaryAction: false,
+      optionalNextAction: null
+    })
+  );
+
+  assert.equal(text, null);
+});
 
 test("presentShellStatsResult turns return-and-rescue into a gentle re-entry plan", () => {
   const text = presentShellStatsResult(

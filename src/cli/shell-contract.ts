@@ -163,13 +163,19 @@ function readTeachWordDraftResult(value: unknown): TeachWordDraftResult {
       ? draft.promptLanguage
       : null;
 
-  if (!responseLanguage || !promptLanguage || typeof ask.knownWord !== "boolean") {
+  if (
+    value.status !== "ready" ||
+    !responseLanguage ||
+    !promptLanguage ||
+    typeof ask.knownWord !== "boolean"
+  ) {
     throw new ConfigurationError(
       "Invalid pending shell proposal: malformed teach draft metadata."
     );
   }
 
   return {
+    status: "ready",
     ask: {
       word: readRequiredString(ask.word, "draft.ask.word"),
       normalized: readRequiredString(ask.normalized, "draft.ask.normalized"),

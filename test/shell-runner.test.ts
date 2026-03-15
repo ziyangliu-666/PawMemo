@@ -634,6 +634,84 @@ test("ShellRunner uses a natural reply when review is requested with no due card
   }
 });
 
+test("ShellRunner greets a return-rescue session from bounded study state on startup", async () => {
+  const dbPath = tempDbPath("shell-startup-return-rescue");
+  const db = openDatabase(dbPath);
+
+  try {
+    const capture = new CaptureWordService(db);
+    const review = new ReviewService(db);
+    capture.capture({
+      word: "luminous",
+      context: "The jellyfish gave off a luminous glow.",
+      gloss: "emitting light",
+      capturedAt: "2000-01-01T09:00:00.000Z"
+    });
+    review.grade({
+      cardId: 1,
+      grade: "good",
+      reviewedAt: "2000-01-01T09:00:00.000Z"
+    });
+
+    const terminal = new FakeShellTerminal(["/quit"]);
+    const runner = new ShellRunner({ db, terminal });
+
+    await runner.run();
+
+    assert.ok(
+      terminal.writes.some((line) => /Welcome back after/i.test(line)),
+      "expected a startup re-entry greeting"
+    );
+    assert.ok(
+      terminal.writes.some((line) => /rescue "luminous" first/i.test(line)),
+      "expected startup copy to point at the rescue target"
+    );
+  } finally {
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
+test("ShellRunner surfaces the recent word on startup when the queue is clear", async () => {
+  const dbPath = tempDbPath("shell-startup-resume-recent");
+  const db = openDatabase(dbPath);
+
+  try {
+    const capture = new CaptureWordService(db);
+    const review = new ReviewService(db);
+    capture.capture({
+      word: "lucid",
+      context: "Her explanation was lucid and easy to follow.",
+      gloss: "clear and easy to understand",
+      capturedAt: "2100-03-01T09:00:00.000Z"
+    });
+
+    review.grade({
+      cardId: 1,
+      grade: "good",
+      reviewedAt: "2100-03-01T09:00:00.000Z"
+    });
+    review.grade({
+      cardId: 2,
+      grade: "good",
+      reviewedAt: "2100-03-01T09:01:00.000Z"
+    });
+
+    const terminal = new FakeShellTerminal(["/quit"]);
+    const runner = new ShellRunner({ db, terminal });
+
+    await runner.run();
+
+    assert.ok(
+      terminal.writes.some((line) => /"lucid" is still close to hand/i.test(line)),
+      "expected startup copy to mention the recent word when nothing is due"
+    );
+  } finally {
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
 test("ShellRunner surfaces return-after-gap summary from real review history", async () => {
   const dbPath = tempDbPath("shell-return-after-gap");
   const db = openDatabase(dbPath);

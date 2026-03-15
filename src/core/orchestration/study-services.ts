@@ -14,6 +14,7 @@ import type {
   RescueCandidateResult,
   ReviewQueueResult,
   ReviewRevealResult,
+  TeachWordDraftOutcome,
   TeachWordDraftResult,
   TeachWordInput,
   TeachWordResult
@@ -78,7 +79,7 @@ export class StudyServices {
     input: TeachWordInput,
     perfHook?: TeachPerfHook,
     options: { signal?: AbortSignal } = {}
-  ): Promise<TeachWordDraftResult> {
+  ): Promise<TeachWordDraftOutcome> {
     return this.teachService.draft(input, perfHook, options);
   }
 

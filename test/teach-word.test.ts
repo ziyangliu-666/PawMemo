@@ -117,7 +117,11 @@ test("TeachWordService can draft study cards before persistence", async () => {
       apiKey: "test-key"
     });
 
+    assert.equal(draft.status, "ready");
     assert.equal(draft.ask.gloss, "emitting light");
+    if (draft.status !== "ready") {
+      assert.fail("expected a ready teach draft");
+    }
     assert.equal(draft.draft.normalizedContext, "The jellyfish gave off a luminous glow.");
     assert.equal(draft.draft.cards.length, 2);
 
@@ -133,6 +137,48 @@ test("TeachWordService can draft study cards before persistence", async () => {
 
     assert.equal(counts.lexeme_count, 0);
     assert.equal(counts.card_count, 0);
+  } finally {
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
+test("TeachWordService returns a clarification draft outcome when card authoring needs a cleaner example", async () => {
+  const dbPath = tempDbPath("teach-draft-clarify");
+  const db = openDatabase(dbPath);
+
+  try {
+    const fakeProvider = new FakeGeminiProvider();
+    fakeProvider.responseQueue = [
+      JSON.stringify({
+        gloss: "尖塔",
+        explanation: "这里指建筑顶部细长尖起的塔尖。",
+        usage_note: "常见于教堂或古典建筑。",
+        example: "The church spire stood above the town.",
+        highlights: ["建筑顶部", "细长尖起的塔尖"],
+        confidence_note: "这个词本身足够明确。"
+      }),
+      JSON.stringify({
+        status: "clarify",
+        reason: "The raw context is just a save command.",
+        normalized_context: "",
+        cloze_context: ""
+      })
+    ];
+
+    const teach = new TeachWordService(db, () => fakeProvider);
+    const draft = await teach.draft({
+      word: "spire",
+      context: "i want to learn spire",
+      apiKey: "test-key"
+    });
+
+    assert.equal(draft.status, "needs_clarification");
+    assert.equal(draft.ask.gloss, "尖塔");
+    if (draft.status !== "needs_clarification") {
+      assert.fail("expected a clarification teach draft outcome");
+    }
+    assert.match(draft.reason, /save command/i);
   } finally {
     db.close();
     fs.rmSync(dbPath, { force: true });

@@ -12,15 +12,12 @@ import type {
   AskWordInput,
   CaptureWordInput,
   LlmProviderName,
+  TeachWordDraftOutcome,
   TeachWordDraftResult,
   TeachWordInput
 } from "../core/domain/models";
-import { detectCardPromptLanguage } from "../review/card-language";
 import type { LlmProvider } from "../llm/types";
-import {
-  CardAuthorContractError,
-  UsageError
-} from "../lib/errors";
+import { UsageError } from "../lib/errors";
 import type { SqliteDatabase } from "../storage/sqlite/database";
 import {
   formatNextReviewCard,
@@ -58,6 +55,7 @@ import type { CliDataKind } from "./theme";
 import { parseCommand, tokenizeCommandLine } from "./command-parser";
 import { ShellControlCommands } from "./shell-control-commands";
 import { asProviderName } from "./shell-command-helpers";
+import { ShellStartupCoordinator } from "./shell-startup";
 import {
   LineShellSurface,
   ReadlineShellTerminal,
@@ -69,11 +67,10 @@ import { ShellSessionState } from "./shell-session-state";
 import { ShellActionExecutor } from "./shell-action-executor";
 import {
   createAskResultIntent,
-  createTeachDraftCancelMessage,
-  createTeachDraftConfirmationMessage,
   createTeachDraftIntent,
   flattenStudyCardIntent
 } from "./study-card-view";
+import { ShellTeachFlowCoordinator } from "./shell-teach-flow";
 import {
   describeShellAction,
   describeShellAgentResponse,
@@ -123,60 +120,14 @@ function parseOptionalLimit(rawValue: string | undefined): number | undefined {
   return limit;
 }
 
-function buildTeachDraftSelectionRequest(
-  draft: TeachWordDraftResult
-): PromptSelectionRequest {
-  const language = draft.draft.promptLanguage;
-  const cardCount = draft.draft.cards.length;
-
-  if (language === "zh") {
-    return {
-      promptText: `要按这个保存 “${draft.ask.word}” 吗？`,
-      initialValue: "confirm",
-      choices: [
-        {
-          value: "confirm",
-          label: `加入这 ${cardCount} 张卡`,
-          aliases: ["1", "y", "yes", "s"],
-          description: "按这个草稿写入学习计划"
-        },
-        {
-          value: "cancel",
-          label: "先不保存",
-          aliases: ["2", "n", "no", "q"],
-          description: "先留在预览，不写入"
-        }
-      ]
-    };
-  }
-
-  return {
-    promptText: `Save this draft for "${draft.ask.word}"?`,
-    initialValue: "confirm",
-    choices: [
-      {
-        value: "confirm",
-        label: `Save ${cardCount} card${cardCount === 1 ? "" : "s"}`,
-        aliases: ["1", "y", "yes", "s"],
-        description: "Persist this exact draft into the study plan"
-      },
-      {
-        value: "cancel",
-        label: "Not now",
-        aliases: ["2", "n", "no", "q"],
-        description: "Leave it as a preview without saving"
-      }
-    ]
-  };
-}
-
-
 export class ShellRunner {
   private readonly surface: ShellSurface;
   private readonly conversationAgent: ShellConversationAgent;
   private readonly sessionState = new ShellSessionState();
   private readonly executor: ShellActionExecutor;
   private readonly controlCommands: ShellControlCommands;
+  private readonly startupCoordinator = new ShellStartupCoordinator();
+  private readonly teachFlow = new ShellTeachFlowCoordinator();
   private readonly activePack: CompanionPackDefinition;
   private readonly debugEnabled: boolean;
   private readonly shellState: ShellState = {
@@ -209,6 +160,7 @@ export class ShellRunner {
 
   async run(): Promise<void> {
     this.surface.beginShell(this.activePack.displayName);
+    this.presentStartupEntry();
     writeShellDebug(this.surface, this.debugEnabled, "shell start", {
       pack: this.activePack.id,
       surface: this.surface.constructor.name,
@@ -255,7 +207,8 @@ export class ShellRunner {
                 context: {
                   recentTurns: this.sessionState.listRecentTurns(6),
                   activePack: this.activePack,
-                  statusSignals: this.getStatusSignals()
+                  statusSignals: this.getStatusSignals(),
+                  homeProjection: this.executor.getHomeProjection()
                 } satisfies ShellAgentContext,
                 onPlannerMessageDelta: (delta) => {
                   this.onPlannerMessageDelta(delta);
@@ -347,7 +300,9 @@ export class ShellRunner {
         draftIntent
       );
       const selection = await this.readShellSelection(
-        buildTeachDraftSelectionRequest(decision.nextPendingProposal.teachDraft)
+        this.teachFlow.buildDraftSelectionRequest(
+          decision.nextPendingProposal.teachDraft
+        )
       );
       const followUpDecision: ShellAgentDecision =
         selection === "confirm"
@@ -403,41 +358,12 @@ export class ShellRunner {
     }
 
     const input = decision.nextPendingProposal.action.input;
-    try {
-      const teachDraft = await this.withMeasuredStage(
-        "teach draft",
-        { word: input.word },
-        () =>
-          this.executor.draftTeach(input, (event) => {
-            writeShellPerf(
-              this.surface,
-              this.debugEnabled,
-              `teach ${event.stage.replace(/_/g, " ")}`,
-              event.elapsedMs,
-              { word: input.word }
-            );
-          }),
-        { type: "study_wait" }
-      );
-
-      return this.buildTeachDraftDecision(input, teachDraft, decision.response.source);
-    } catch (error) {
-      if (error instanceof CardAuthorContractError) {
-        return {
-          response: {
-            kind: "execute",
-            action: {
-              kind: "teach-clarify-context",
-              input
-            },
-            source: decision.response.source
-          },
-          nextPendingProposal: null
-        };
-      }
-
-      throw error;
-    }
+    const teachDraft = await this.loadTeachDraftOutcome(input);
+    return this.teachFlow.prepareDecision(
+      input,
+      teachDraft,
+      decision.response.source
+    );
   }
 
   private async executeAction(
@@ -528,6 +454,19 @@ export class ShellRunner {
     this.shellState.lineOverride = undefined;
   }
 
+  private presentStartupEntry(): void {
+    const summary = this.executor.getCompanionSignals();
+    const home = this.executor.getHomeProjection();
+    const entry = this.startupCoordinator.createEntry(summary, home);
+
+    this.shellState.mood = entry.mood;
+    this.startupCoordinator.renderEntry(this.surface, entry);
+
+    if (entry.text) {
+      this.sessionState.recordAssistantMessage(entry.text);
+    }
+  }
+
   private getStatusSignals(): CompanionStatusSignals {
     const signals = this.executor.getCompanionSignals();
 
@@ -567,6 +506,26 @@ export class ShellRunner {
       reaction.lineOverride ?? "Sniffing around..."
     );
     this.shellState.frame += 1;
+  }
+
+  private loadTeachDraftOutcome(
+    input: TeachWordInput
+  ): Promise<TeachWordDraftOutcome> {
+    return this.withMeasuredStage(
+      "teach draft",
+      { word: input.word },
+      () =>
+        this.executor.draftTeach(input, (event) => {
+          writeShellPerf(
+            this.surface,
+            this.debugEnabled,
+            `teach ${event.stage.replace(/_/g, " ")}`,
+            event.elapsedMs,
+            { word: input.word }
+          );
+        }),
+      { type: "study_wait" }
+    );
   }
 
   private async withMeasuredStage<T>(
@@ -939,51 +898,12 @@ export class ShellRunner {
     }
   }
 
-  private buildTeachDraftDecision(
-    input: TeachWordInput,
-    teachDraft: TeachWordDraftResult,
-    source: ShellAgentResponse["source"]
-  ): ShellAgentDecision {
-    return {
-      response: {
-        kind: "message",
-        mood: "curious",
-        text: createTeachDraftConfirmationMessage(teachDraft),
-        source
-      },
-      nextPendingProposal: {
-        action: {
-          kind: "teach-confirm",
-          input,
-          draft: teachDraft
-        },
-        confirmationMessage: createTeachDraftConfirmationMessage(teachDraft),
-        cancelMessage: createTeachDraftCancelMessage(teachDraft),
-        teachDraft
-      }
-    };
-  }
-
   private async publishTeachDraftDecision(
     input: TeachWordInput,
     source: ShellAgentResponse["source"]
   ): Promise<void> {
-    const teachDraft = await this.withMeasuredStage(
-      "teach draft",
-      { word: input.word },
-      () =>
-        this.executor.draftTeach(input, (event) => {
-          writeShellPerf(
-            this.surface,
-            this.debugEnabled,
-            `teach ${event.stage.replace(/_/g, " ")}`,
-            event.elapsedMs,
-            { word: input.word }
-          );
-        }),
-      { type: "study_wait" }
-    );
-    const draftDecision = this.buildTeachDraftDecision(input, teachDraft, source);
+    const teachDraft = await this.loadTeachDraftOutcome(input);
+    const draftDecision = this.teachFlow.prepareDecision(input, teachDraft, source);
     this.sessionState.applyDecision(draftDecision);
     await this.handleDecision(draftDecision);
   }
@@ -991,12 +911,7 @@ export class ShellRunner {
   private async runTeachClarification(
     input: TeachWordInput
   ): Promise<void> {
-    const promptLanguage = detectCardPromptLanguage(input.context);
-    const clarificationMessage =
-      promptLanguage === "zh"
-        ? `我知道你想学 “${input.word}”，但这句话还不够拿来做例句卡。你想怎么继续？`
-        : `I can tell you want to learn "${input.word}", but that still is not a usable example sentence for a review card. How do you want to continue?`;
-
+    const clarificationMessage = this.teachFlow.createClarificationMessage(input);
     this.writeAssistantReplyNow(clarificationMessage);
     this.sessionState.recordActionResult(
       clarificationMessage,
@@ -1006,54 +921,9 @@ export class ShellRunner {
       })
     );
 
-    const selection = await this.readShellSelection({
-      promptText:
-        promptLanguage === "zh"
-          ? `怎么继续处理 “${input.word}”？`
-          : `How should I continue with "${input.word}"?`,
-      initialValue: "definition",
-      choices: promptLanguage === "zh"
-        ? [
-            {
-              value: "definition",
-              label: "定义卡",
-              aliases: ["1", "d"],
-              description: "直接按词义起草一张卡"
-            },
-            {
-              value: "example",
-              label: "给例句",
-              aliases: ["2", "e"],
-              description: "我再给你一句包含这个词的句子"
-            },
-            {
-              value: "explain",
-              label: "只解释",
-              aliases: ["3", "a"],
-              description: "先解释这个词，不保存"
-            }
-          ]
-        : [
-            {
-              value: "definition",
-              label: "Definition card",
-              aliases: ["1", "d"],
-              description: "Draft a simple card from the gloss now"
-            },
-            {
-              value: "example",
-              label: "Give example",
-              aliases: ["2", "e"],
-              description: "I will give you a sentence with the word in it"
-            },
-            {
-              value: "explain",
-              label: "Explain only",
-              aliases: ["3", "a"],
-              description: "Explain it without saving"
-            }
-          ]
-    });
+    const selection = await this.readShellSelection(
+      this.teachFlow.buildClarificationRequest(input)
+    );
 
     switch (selection) {
       case "definition":
@@ -1066,10 +936,7 @@ export class ShellRunner {
         );
         return;
       case "example": {
-        const exampleRequestMessage =
-          promptLanguage === "zh"
-            ? `发我一句带 “${input.word}” 的例句，我就按例句起草。`
-            : `Send me one sentence with "${input.word}" in it and I'll draft the card from that.`;
+        const exampleRequestMessage = this.teachFlow.createExampleRequestMessage(input);
         this.writeAssistantReplyNow(exampleRequestMessage);
         this.sessionState.recordActionResult(
           exampleRequestMessage,
@@ -1080,14 +947,11 @@ export class ShellRunner {
         );
 
         const exampleContext = await this.readFreeformShellPrompt(
-          promptLanguage === "zh" ? "例句: " : "Example: "
+          this.teachFlow.createExamplePromptLabel(input)
         );
 
         if (exampleContext.trim().length === 0) {
-          const emptyExampleMessage =
-            promptLanguage === "zh"
-              ? `我还没有拿到例句，所以先不保存 “${input.word}”。`
-              : `I still do not have an example sentence, so I did not save "${input.word}".`;
+          const emptyExampleMessage = this.teachFlow.createExampleMissingMessage(input);
           this.writeAssistantReplyNow(emptyExampleMessage);
           this.sessionState.recordActionResult(
             emptyExampleMessage,

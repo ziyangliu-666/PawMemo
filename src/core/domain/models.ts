@@ -220,9 +220,21 @@ export interface TeachCardDraft {
 }
 
 export interface TeachWordDraftResult {
+  status: "ready";
   ask: AskWordResult;
   draft: TeachCardDraft;
 }
+
+export interface TeachWordDraftClarificationResult {
+  status: "needs_clarification";
+  ask: AskWordResult;
+  promptLanguage: "en" | "zh";
+  reason: string;
+}
+
+export type TeachWordDraftOutcome =
+  | TeachWordDraftResult
+  | TeachWordDraftClarificationResult;
 
 export interface TeachWordResult {
   ask: AskWordResult;

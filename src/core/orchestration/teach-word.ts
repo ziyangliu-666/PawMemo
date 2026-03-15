@@ -3,6 +3,7 @@ import type {
   CaptureWordInput,
   ReviewCardType,
   TeachCardDraft,
+  TeachWordDraftOutcome,
   TeachWordDraftResult,
   TeachWordInput,
   TeachWordResult,
@@ -82,6 +83,13 @@ export class TeachWordService {
     options: { signal?: AbortSignal } = {}
   ): Promise<TeachWordResult> {
     const draft = await this.draft(input, perfHook, options);
+
+    if (draft.status !== "ready") {
+      throw new CardAuthorContractError(
+        `Provider did not return a usable study context for \`teach\`. ${draft.reason}`
+      );
+    }
+
     return this.confirmDraft(input, draft, perfHook);
   }
 
@@ -89,7 +97,7 @@ export class TeachWordService {
     input: TeachWordInput,
     perfHook?: TeachPerfHook,
     options: { signal?: AbortSignal } = {}
-  ): Promise<TeachWordDraftResult> {
+  ): Promise<TeachWordDraftOutcome> {
     const explanationStartedAt = performance.now();
     const explanation = await this.explanationEngine.explain(input, options);
     perfHook?.({
@@ -135,10 +143,14 @@ export class TeachWordService {
     })();
 
     if (!authoredCards.accepted || !authoredCards.normalizedContext) {
-      const suffix = authoredCards.reason ? ` ${authoredCards.reason}` : "";
-      throw new CardAuthorContractError(
-        `Provider did not return a usable study context for \`teach\`.${suffix}`
-      );
+      return {
+        status: "needs_clarification",
+        ask,
+        promptLanguage,
+        reason:
+          authoredCards.reason ??
+          "The study context needs clarification before PawMemo can save it."
+      };
     }
 
     const cardTypes: ReviewCardType[] | undefined =
@@ -161,6 +173,7 @@ export class TeachWordService {
     };
 
     return {
+      status: "ready",
       ask,
       draft
     };

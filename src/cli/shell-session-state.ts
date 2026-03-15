@@ -119,6 +119,10 @@ export class ShellSessionState {
     this.appendTurn("assistant", "result", text, payloadJson, createdAt);
   }
 
+  recordAssistantMessage(text: string, createdAt = nowIso()): void {
+    this.appendTurn("assistant", "message", text, null, createdAt);
+  }
+
   recordError(text: string, createdAt = nowIso()): void {
     this.appendTurn("assistant", "error", text, null, createdAt);
   }

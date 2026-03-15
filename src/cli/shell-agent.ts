@@ -1,4 +1,7 @@
-import type { TeachWordInput } from "../core/domain/models";
+import type {
+  HomeProjectionResult,
+  TeachWordInput
+} from "../core/domain/models";
 import type {
   CompanionPackDefinition,
   CompanionStatusSignals
@@ -16,6 +19,7 @@ export interface ShellAgentContext {
   recentTurns: ShellPlannerTurn[];
   activePack: CompanionPackDefinition;
   statusSignals: CompanionStatusSignals;
+  homeProjection: HomeProjectionResult;
 }
 
 const SIMPLE_EXECUTE_KINDS = [
@@ -123,6 +127,7 @@ export class ShellConversationAgent {
       recentTurns: context.recentTurns,
       activePack: context.activePack,
       statusSignals: context.statusSignals,
+      homeProjection: context.homeProjection,
       pendingProposalText: pendingProposal?.confirmationMessage ?? null
     }, {
       onMessageDelta: onPlannerMessageDelta,

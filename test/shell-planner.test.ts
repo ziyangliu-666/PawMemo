@@ -14,7 +14,10 @@ import type {
   LlmTextResponse,
   LlmTextStreamRequest
 } from "../src/llm/types";
-import type { LlmSettings } from "../src/core/domain/models";
+import type {
+  HomeProjectionResult,
+  LlmSettings
+} from "../src/core/domain/models";
 
 class FakePlannerProvider implements LlmProvider {
   readonly name = "gemini" as const;
@@ -67,6 +70,27 @@ function createPlannerSettings(
         ...overrides
       };
     }
+  };
+}
+
+function homeProjection(
+  overrides: Partial<HomeProjectionResult> = {}
+): HomeProjectionResult {
+  return {
+    generatedAt: "2026-03-15T12:00:00.000Z",
+    dueCount: 0,
+    recentWord: null,
+    focusWord: null,
+    focusReason: null,
+    hasPriorReviewHistory: false,
+    isReturnAfterGap: false,
+    returnGapDays: null,
+    rescueCandidate: null,
+    entryKind: "capture",
+    suggestedNextAction: "capture",
+    canStopAfterPrimaryAction: false,
+    optionalNextAction: null,
+    ...overrides
   };
 }
 
@@ -196,6 +220,18 @@ test("buildShellPlannerPrompt layers structured companion prompt fields into pla
       dueCount: 2,
       recentWord: "lucid"
     },
+    homeProjection: homeProjection({
+      dueCount: 2,
+      recentWord: "lucid",
+      focusWord: "lucid",
+      focusReason: "recent",
+      entryKind: "return_review",
+      suggestedNextAction: "review",
+      canStopAfterPrimaryAction: true,
+      isReturnAfterGap: true,
+      hasPriorReviewHistory: true,
+      returnGapDays: 3
+    }),
     pendingProposalText: "Do you want me to save lucid first?"
   });
 
@@ -209,6 +245,9 @@ test("buildShellPlannerPrompt layers structured companion prompt fields into pla
   assert.match(prompt.userPrompt, /Continue the same ongoing scene/);
   assert.match(prompt.userPrompt, /Example voice messages:/);
   assert.match(prompt.userPrompt, /I'm here\. We can do this together\./);
+  assert.match(prompt.userPrompt, /Home entry: return_review/);
+  assert.match(prompt.userPrompt, /Home suggested action: review/);
+  assert.match(prompt.userPrompt, /Home return gap days: 3/);
 });
 
 test("LlmShellPlanner uses the provider for chat planning when configured", async () => {
@@ -245,7 +284,8 @@ test("LlmShellPlanner uses the provider for chat planning when configured", asyn
       statusSignals: {
         dueCount: 0,
         recentWord: null
-      }
+      },
+      homeProjection: homeProjection()
     });
 
     assert.deepEqual(result, {
@@ -298,7 +338,8 @@ test("LlmShellPlanner can surface streamed planner message deltas for reply turn
         statusSignals: {
           dueCount: 0,
           recentWord: null
-        }
+        },
+        homeProjection: homeProjection()
       },
       {
         onMessageDelta: (delta) => {
@@ -375,7 +416,8 @@ test("LlmShellPlanner keeps streaming when an earlier array field contains neste
         statusSignals: {
           dueCount: 0,
           recentWord: null
-        }
+        },
+        homeProjection: homeProjection()
       },
       {
         onMessageDelta: (delta) => {
@@ -433,7 +475,8 @@ test("LlmShellPlanner fails when no API key is configured", async () => {
         statusSignals: {
           dueCount: 0,
           recentWord: null
-        }
+        },
+        homeProjection: homeProjection()
       })
     );
   } finally {

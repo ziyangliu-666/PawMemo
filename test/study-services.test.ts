@@ -167,6 +167,44 @@ test("StudyServices routes ask and teach through the same provider-backed study 
   }
 });
 
+test("StudyServices surfaces a typed teach clarification outcome before persistence", async () => {
+  const dbPath = tempDbPath("study-services-teach-clarify");
+  const db = openDatabase(dbPath);
+
+  try {
+    const fakeProvider = new FakeGeminiProvider();
+    fakeProvider.responseQueue = [
+      JSON.stringify({
+        gloss: "尖塔",
+        explanation: "这里指建筑顶部细长尖起的塔尖。",
+        usage_note: "常见于教堂或古典建筑。",
+        example: "The church spire stood above the town.",
+        highlights: ["建筑顶部", "细长尖起的塔尖"],
+        confidence_note: "这个词本身足够明确。"
+      }),
+      JSON.stringify({
+        status: "clarify",
+        reason: "The raw context is just a save command.",
+        normalized_context: "",
+        cloze_context: ""
+      })
+    ];
+
+    const study = new StudyServices(db, () => fakeProvider);
+    const draft = await study.draftTeach({
+      word: "spire",
+      context: "i want to learn spire",
+      apiKey: "test-key"
+    });
+
+    assert.equal(draft.status, "needs_clarification");
+    assert.equal(draft.ask.gloss, "尖塔");
+  } finally {
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
 test("StudyServices asks for Chinese learner-facing explanation fields when the request is Chinese", async () => {
   const dbPath = tempDbPath("study-services-ask-zh");
   const db = openDatabase(dbPath);

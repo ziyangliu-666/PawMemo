@@ -13,6 +13,7 @@ import type {
   RescueCandidateResult,
   ReviewQueueResult,
   ReviewRevealResult,
+  TeachWordDraftOutcome,
   TeachWordDraftResult,
   TeachWordInput,
   TeachWordResult
@@ -111,7 +112,7 @@ export class ShellActionExecutor {
     input: TeachWordInput,
     perfHook?: TeachPerfHook,
     options: { signal?: AbortSignal } = {}
-  ): Promise<TeachWordDraftResult> {
+  ): Promise<TeachWordDraftOutcome> {
     return this.study.draftTeach(input, perfHook, options);
   }
 

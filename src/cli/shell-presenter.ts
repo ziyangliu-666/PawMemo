@@ -1,6 +1,7 @@
 import type {
   AskWordResult,
   CaptureWordResult,
+  CompanionSignalsResult,
   HomeProjectionResult,
   RescueCandidateResult,
   StatsSummaryResult,
@@ -84,6 +85,52 @@ export function presentShellTeachResult(result: TeachWordResult): string {
     result.ask.explanation,
     `It's queued with ${cardCountLabel(result.capture.cards.length)} for later review`
   ]);
+}
+
+export function presentShellStartupIntro(
+  summary: CompanionSignalsResult,
+  home: HomeProjectionResult
+): string | null {
+  switch (home.entryKind) {
+    case "return_rescue":
+      return sentence([
+        home.returnGapDays !== null
+          ? `Welcome back after ${dayCountLabel(home.returnGapDays)}`
+          : "Welcome back",
+        `We'll rescue ${quote(home.focusWord ?? "that fading word")} first`,
+        home.optionalNextAction === "review"
+          ? "After that, you can stop or do one more"
+          : "That one gentle rescue is enough for today"
+      ]);
+    case "return_review":
+      return sentence([
+        home.returnGapDays !== null
+          ? `Welcome back after ${dayCountLabel(home.returnGapDays)}`
+          : "Welcome back",
+        `You have ${cardCountLabel(summary.dueCount)} due right now`,
+        "One short review lap is enough to reconnect the line"
+      ]);
+    case "rescue":
+      return sentence([
+        `You have ${cardCountLabel(summary.dueCount)} due right now`,
+        `We'll rescue ${quote(home.focusWord ?? "that fading word")} first`,
+        "You do not need the whole pile at once"
+      ]);
+    case "resume_recent":
+      return sentence([
+        home.focusWord
+          ? `${quote(home.focusWord)} is still close to hand`
+          : "You're clear right now",
+        "We can pick it up again or bring in one new word"
+      ]);
+    case "review":
+      return sentence([
+        `You have ${cardCountLabel(summary.dueCount)} due right now`,
+        "One short review lap would be enough"
+      ]);
+    case "capture":
+      return null;
+  }
 }
 
 export function presentShellStatsResult(

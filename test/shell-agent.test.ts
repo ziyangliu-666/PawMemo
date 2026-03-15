@@ -1,10 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { ShellConversationAgent } from "../src/cli/shell-agent";
+import {
+  ShellConversationAgent,
+  type ShellAgentContext
+} from "../src/cli/shell-agent";
 import { deserializePendingShellProposal } from "../src/cli/shell-contract";
 
-const plannerContext = {
+const plannerContext: ShellAgentContext = {
   recentTurns: [],
   activePack: {
     id: "momo",
@@ -24,6 +27,21 @@ const plannerContext = {
   statusSignals: {
     dueCount: 0,
     recentWord: null
+  },
+  homeProjection: {
+    generatedAt: "2026-03-15T12:00:00.000Z",
+    dueCount: 0,
+    recentWord: null,
+    focusWord: null,
+    focusReason: null,
+    hasPriorReviewHistory: false,
+    isReturnAfterGap: false,
+    returnGapDays: null,
+    rescueCandidate: null,
+    entryKind: "capture",
+    suggestedNextAction: "capture",
+    canStopAfterPrimaryAction: false,
+    optionalNextAction: null
   }
 };
 

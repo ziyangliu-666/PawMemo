@@ -2,6 +2,7 @@ import type {
   CompanionPackDefinition,
   CompanionStatusSignals
 } from "../companion/types";
+import type { HomeProjectionResult } from "../core/domain/models";
 import type { ShellPlannerTurn } from "../cli/shell-contract";
 
 export interface ShellPlannerPromptInput {
@@ -9,6 +10,7 @@ export interface ShellPlannerPromptInput {
   recentTurns: ShellPlannerTurn[];
   activePack: CompanionPackDefinition;
   statusSignals: CompanionStatusSignals;
+  homeProjection: HomeProjectionResult;
   pendingProposalText?: string | null;
 }
 
@@ -103,6 +105,11 @@ export function buildShellPlannerPrompt(
       `Pending proposal: ${input.pendingProposalText ?? "none"}`,
       `Due count: ${input.statusSignals.dueCount}`,
       `Recent word: ${input.statusSignals.recentWord ?? "none"}`,
+      `Home entry: ${input.homeProjection.entryKind}`,
+      `Home focus word: ${input.homeProjection.focusWord ?? "none"}`,
+      `Home suggested action: ${input.homeProjection.suggestedNextAction}`,
+      `Home can stop after primary action: ${input.homeProjection.canStopAfterPrimaryAction ? "yes" : "no"}`,
+      `Home return gap days: ${input.homeProjection.returnGapDays ?? "none"}`,
       "Recent turns:",
       formatRecentTurns(input.recentTurns),
       ...formatPromptList(
@@ -124,6 +131,8 @@ export function buildShellPlannerPrompt(
       '- "add ephemeral" -> {"kind":"teach","word":"ephemeral","context":"add ephemeral","message":"..."}',
       '- "what does lucid mean?" -> {"kind":"ask","word":"lucid","context":"what does lucid mean?"}',
       '- "救一下" -> {"kind":"rescue"}',
+      '- when Home suggested action is rescue and the user says "let\'s continue", prefer {"kind":"rescue"}',
+      '- when Home suggested action is review and the user says "let\'s continue", prefer {"kind":"review-session"}',
       "Do not return markdown. Do not include extra keys."
     ].join("\n")
   };
