@@ -3,7 +3,6 @@ import { UsageError } from "../lib/errors";
 import { getDefaultModelForProvider } from "../llm/provider-metadata";
 import type { ListLlmModelsResult } from "../llm/llm-config-service";
 import {
-  formatCompanionPacks,
   formatLlmModelList,
   formatLlmStatus
 } from "./format";

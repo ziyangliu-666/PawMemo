@@ -90,15 +90,15 @@ export async function fetchWithLlmTimeout(
 
     // Wrap the response to clear timeout only when body is consumed
     return new Proxy(response, {
-      get(target, prop, receiver) {
-        const value = Reflect.get(target, prop, target);
+      get(target, prop) {
+        const value = Reflect.get(target, prop, target) as unknown;
 
         if (typeof value === "function") {
           const bodyMethods = ["json", "text", "blob", "arrayBuffer", "formData"];
           if (bodyMethods.includes(prop as string)) {
-            return async function (this: Response, ...args: any[]) {
+            return async function (this: Response, ...args: unknown[]) {
               try {
-                return await (value as Function).apply(target, args);
+                return await (value as (...args: unknown[]) => Promise<unknown>).apply(target, args);
               } catch (error) {
                 if (timedOut && isAbortError(error)) {
                   throw new ProviderRequestError(
@@ -111,11 +111,11 @@ export async function fetchWithLlmTimeout(
               }
             };
           }
-          return value.bind(target);
+          return (value as (...args: unknown[]) => unknown).bind(target);
         }
 
         if (prop === "body" && value) {
-          return wrapReadableStream(value as ReadableStream, clear, () => ({
+          return wrapReadableStream(value as ReadableStream<Uint8Array>, clear, () => ({
             timedOut,
             timeoutMs,
             label
@@ -138,10 +138,10 @@ export async function fetchWithLlmTimeout(
 }
 
 function wrapReadableStream(
-  stream: ReadableStream,
+  stream: ReadableStream<Uint8Array>,
   onSettled: () => void,
   getTimeoutContext: () => { timedOut: boolean; timeoutMs: number; label: string }
-): ReadableStream {
+): ReadableStream<Uint8Array> {
   const reader = stream.getReader();
 
   return new ReadableStream({
@@ -165,11 +165,11 @@ function wrapReadableStream(
             )
           );
         } else {
-          controller.error(error);
+          controller.error(error as Error);
         }
       }
     },
-    async cancel(reason) {
+    async cancel(reason: unknown) {
       onSettled();
       await reader.cancel(reason);
     }
