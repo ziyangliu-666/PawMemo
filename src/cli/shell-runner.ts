@@ -21,7 +21,7 @@ import type {
   TeachWordInput
 } from "../core/domain/models";
 import type { LlmProvider } from "../llm/types";
-import { CardSelectionError, ConfigurationError, DuplicateEncounterError, UsageError } from "../lib/errors";
+import { CardSelectionError, ConfigurationError, DuplicateEncounterError, ProviderRequestError, UsageError } from "../lib/errors";
 import type { SqliteDatabase } from "../storage/sqlite/database";
 import {
   formatNextReviewCard,
@@ -61,6 +61,7 @@ import type {
 import { LlmShellPlanner } from "./shell-planner";
 import type { CliDataKind } from "./theme";
 import { parseCommand, tokenizeCommandLine } from "./command-parser";
+import { interpretShellInput } from "./shell-intent";
 import { ShellControlCommands } from "./shell-control-commands";
 import { asProviderName } from "./shell-command-helpers";
 import { ShellStartupCoordinator } from "./shell-startup";
@@ -194,6 +195,7 @@ export class ShellRunner {
   private companionVoiceTemplates: CompanionDynamicTemplateBank = {};
   private companionVoiceRefreshVersion = 0;
   private plannerMessageStreamStarted = false;
+  private consecutiveProviderFailures = 0;
 
   constructor(options: ShellRunnerOptions) {
     const terminal = options.terminal ?? new ReadlineShellTerminal();
@@ -256,6 +258,20 @@ export class ShellRunner {
           continue;
         }
 
+        // Circuit breaker: if the provider has failed 3+ times consecutively and
+        // the input would go to the planner (not a slash command), short-circuit
+        // with a warm degradation message so users know they can still use commands.
+        if (
+          this.consecutiveProviderFailures >= 3 &&
+          interpretShellInput(rawInput).kind === "planner"
+        ) {
+          const degradedMsg =
+            "My connection's resting — but you can still use `/capture`, `/review`, `/rescue`, and other commands.";
+          this.writeAssistantReplyNow(degradedMsg);
+          this.sessionState.recordAssistantMessage(degradedMsg);
+          continue;
+        }
+
         this.refreshTuiCompanionPresence();
         const turnStartedAt = performance.now();
         let turnOutcome = "ok";
@@ -309,12 +325,22 @@ export class ShellRunner {
             () => this.handleDecision(preparedDecision)
           );
 
+          // Successful planner/action turn — reset circuit breaker.
+          this.consecutiveProviderFailures = 0;
+
           if (shouldExit) {
             return;
           }
         } catch (error) {
           if (error instanceof ShellSurfaceAbortError) {
             return;
+          }
+
+          // Track consecutive provider failures for circuit breaker.
+          if (error instanceof ProviderRequestError) {
+            this.consecutiveProviderFailures += 1;
+          } else {
+            this.consecutiveProviderFailures = 0;
           }
 
           turnOutcome = "error";

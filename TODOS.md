@@ -33,21 +33,15 @@ Agreed sequence: streaming → voice bank → warmth → schema migration.
 
 ## P2
 
-### SQLite error actionable guidance
+### ~~SQLite error actionable guidance~~ ✓ Done
 **What:** Add SQLite error class detection in `presentShellError` with recovery guidance.
-**Why:** Locked/corrupt DB currently shows "Something slipped" with no actionable guidance.
-**Context:** `better-sqlite3` throws errors with a distinct class. Catch it and show: "There's a problem with your study database. Try `pawmemo --db /tmp/test.db` to verify, or check that `pawmemo.db` isn't locked by another process."
-**Effort:** S
-**Depends on:** None
+**Fix:** In `presentShellError`, check `error.name === "SqliteError"` and dispatch on `error.code`: SQLITE_BUSY/LOCKED shows lock guidance; SQLITE_CORRUPT/NOTADB shows corruption guidance; other SQLite errors show the generic DB guidance with the `--db` verification tip.
 
 ---
 
-### LLM provider circuit breaker / warm degradation mode
+### ~~LLM provider circuit breaker / warm degradation mode~~ ✓ Done
 **What:** After N consecutive provider failures, surface a 'resting mode' companion state.
-**Why:** Repeated "I couldn't reach the model" messages feel broken; warm degradation makes it intentional.
-**Context:** Track consecutive `ProviderRequestError` count in shell session state. After 3 failures, companion switches to template-only mode with copy like "My connection's resting — but you can still capture, review, and rescue." Full planner reactivates on next successful call.
-**Effort:** M
-**Depends on:** None
+**Fix:** `consecutiveProviderFailures` counter in `ShellRunner`. After 3 consecutive `ProviderRequestError`s, planner-bound input short-circuits with a warm message listing still-usable slash commands. Resets on any successful turn or non-provider error. Slash commands always bypass LLM (fast-path in `ShellConversationAgent`) so they continue working unaffected.
 
 ---
 
