@@ -116,12 +116,9 @@ Agreed sequence: streaming → voice bank → warmth → schema migration.
 
 ---
 
-### Card lifecycle idempotency validation
+### ~~Card lifecycle idempotency validation~~ ✓ Done
 **What:** Add state-machine validation in `CardWorkspaceService` so 'archive already-archived' fails clearly.
-**Why:** Current behavior on duplicate lifecycle transitions is unknown; explicit validation prevents confusing silent failures.
-**Context:** Before executing a lifecycle mutation, check current lifecycle state. If already in target state, return early or throw a clear `UsageError`.
-**Effort:** XS
-**Depends on:** None
+**Fix:** In `setLifecycle`, check `current.lifecycleState === input.lifecycleState` before executing the mutation. Throws `UsageError` with a clear message like "Card #3 is already archived."
 
 ---
 

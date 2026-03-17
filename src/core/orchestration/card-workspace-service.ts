@@ -173,6 +173,13 @@ export class CardWorkspaceService {
     input: SetStudyCardLifecycleInput
   ): StudyCardOperationResult {
     const current = this.resolveSelector(input.selector);
+
+    if (current.lifecycleState === input.lifecycleState) {
+      throw new UsageError(
+        `Card ${describeSelector(input.selector)} is already ${input.lifecycleState}.`
+      );
+    }
+
     const timestamp = nowIso();
     const card = this.db.transaction(() => {
       const updated = this.reviewCards.updateLifecycle(
