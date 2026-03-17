@@ -527,6 +527,20 @@ export function presentShellError(error: unknown): string {
     return "I couldn't reach the model just now. Try again, or check `/models` if the connection looks off.";
   }
 
+  if (error instanceof Error && error.name === "SqliteError") {
+    const code = (error as Error & { code?: string }).code ?? "";
+
+    if (code === "SQLITE_BUSY" || code === "SQLITE_LOCKED") {
+      return "Your study database is locked by another process. Close any other pawmemo sessions and try again, or use `pawmemo --db /tmp/test.db` to verify the issue.";
+    }
+
+    if (code === "SQLITE_CORRUPT" || code === "SQLITE_NOTADB") {
+      return "Your study database looks damaged. Try `pawmemo --db /tmp/test.db` to confirm, then check your backups.";
+    }
+
+    return "There's a problem with your study database. Try `pawmemo --db /tmp/test.db` to verify, or check that `pawmemo.db` isn't locked by another process.";
+  }
+
   if (error instanceof Error) {
     return `Something slipped while I was handling that. ${trimSentence(error.message)}`;
   }

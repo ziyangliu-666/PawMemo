@@ -14,12 +14,11 @@ Agreed sequence: streaming → voice bank → warmth → schema migration.
 
 ---
 
-### Richer voice bank event keys
-**What:** Expand voice bank from 4-6 event keys to 10-15 covering the full companion emotional surface.
-**Why:** Deeper event coverage makes the companion feel like it's actually watching progress.
-**Context:** Current keys: `status_snapshot`, `idle_prompt`, `stats_summary`, `review_session_empty`. Add: `re_capture_detection`, `word_stabilized`, `streak_milestone` (3/7/14/30 days), `shell_exit_farewell`, `rescue_complete_counter`, `card_created`.
-**Effort:** M
-**Depends on:** None
+### ~~Richer voice bank event keys~~ ✓ Done
+**What:** Expanded from 13 → 19 event keys covering the full companion emotional surface.
+**Added:** `re_capture_detection` ({{encounterCount}}), `word_stabilized`, `streak_milestone` ({{streakDays}}), `rescue_complete_counter` ({{rescueCount}}), `card_created`, `shell_exit` (farewell).
+**Also added:** `encounterCount`, `streakDays`, `rescueCount` placeholders to template context and interpolation.
+**Note:** Keys are wired in voice bank and reaction-builder. Actual event firing (re-capture, grading mastery transition, streak calc, etc.) is the P2 wire-up work.
 
 ---
 
@@ -70,30 +69,21 @@ Agreed sequence: streaming → voice bank → warmth → schema migration.
 
 ---
 
-### Re-capture detection with companion memory commentary
+### ~~Re-capture detection with companion memory commentary~~ ✓ Done
 **What:** When a word is captured that's already in the list, companion acknowledges it instead of a generic error.
-**Why:** "Oh, luminous again! You've seen it 3 times." makes the companion feel like it remembers.
-**Context:** Currently `DuplicateEncounterError` is humanized to "I already have that word in the pile." Instead, look up the existing encounter count and route through a `re_capture` voice bank event with the count as context. The error path becomes a warm moment.
-**Effort:** S
-**Depends on:** Richer voice bank event keys (`re_capture_detection` key)
+**Fix:** Added `countByLexemeId` to `EncounterRepository`, exposed `getEncounterCount(word)` in `ShellActionExecutor`. In `runCaptureInput`, catch `DuplicateEncounterError`, resolve count, fire `re_capture_detection` reaction (warm moment, recorded as action result not error). Voice bank template uses `{{encounterCount}}`.
 
 ---
 
-### First-stability celebration
+### ~~First-stability celebration~~ ✓ Done
 **What:** When a word reaches 'stable' mastery state for the first time, emit a specific companion moment.
-**Why:** "You locked in luminous. 永远记住了。" marks a real milestone rather than letting it pass silently.
-**Context:** The grading path in `ReviewService` already computes the new mastery state. Check if the previous mastery state was below `stable` and the new one is `stable`. Emit a `word_stabilized` companion event with the word name. Route through voice bank with `word_stabilized` key.
-**Effort:** S-M
-**Depends on:** Richer voice bank event keys (`word_stabilized` key)
+**Fix:** After review session, compare `signalsBefore.stableCount` vs `signalsAfter.stableCount`. If increased, fire `word_stabilized` reaction with `recentWord` from post-session signals. Practical approximation — targets the common case without per-grade callbacks.
 
 ---
 
-### Shell exit farewell
+### ~~Shell exit farewell~~ ✓ Done
 **What:** Companion delivers a brief farewell on /quit or second Ctrl+C, referencing one recent word.
-**Why:** Leaving the shell should feel like a moment, not just a process exit.
-**Context:** Shell exit flows through exit confirmation state. On confirmed exit, before teardown, show one line from a `shell_exit_farewell` voice bank template that references the most recent saved word. Falls back to pack template if voice bank isn't populated.
-**Effort:** XS
-**Depends on:** Richer voice bank event keys (`shell_exit_farewell` key)
+**Fix:** Already wired at `shell-runner.ts:458` — `shell_exit` event fires on confirmed quit with `getStatusSignals()` (includes `recentWord`). Voice bank template uses `{{recentWord}}`. No code changes needed; event was in place from companion types work.
 
 ---
 
