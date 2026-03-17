@@ -197,6 +197,7 @@ export class ShellRunner {
   private plannerMessageStreamStarted = false;
   private consecutiveProviderFailures = 0;
   private readonly voiceRefreshAbort = new AbortController();
+  private pendingFarewell?: string;
 
   constructor(options: ShellRunnerOptions) {
     const terminal = options.terminal ?? new ReadlineShellTerminal();
@@ -376,6 +377,9 @@ export class ShellRunner {
     } finally {
       this.voiceRefreshAbort.abort();
       await this.surface.close();
+      if (this.pendingFarewell) {
+        process.stdout.write(`${this.pendingFarewell}\n`);
+      }
     }
   }
 
@@ -491,7 +495,7 @@ export class ShellRunner {
                 dynamicTemplates: this.companionVoiceTemplates
               }
             );
-            this.surface.renderCompanionLine(reaction.lineOverride ?? "See you soon.");
+            this.pendingFarewell = reaction.lineOverride ?? "See you soon.";
             return true;
           }
           case "help":
