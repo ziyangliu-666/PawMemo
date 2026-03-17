@@ -19,6 +19,7 @@ export type CompanionReactionKey =
   | "teach_success"
   | "rescue_candidate"
   | "rescue_complete"
+  | "rescue_complete_counter"
   | "return_after_gap"
   | "review_next"
   | "review_reveal"
@@ -28,7 +29,11 @@ export type CompanionReactionKey =
   | "review_session_quit"
   | "command_error"
   | "idle_prompt"
-  | "shell_exit";
+  | "shell_exit"
+  | "re_capture_detection"
+  | "word_stabilized"
+  | "streak_milestone"
+  | "card_created";
 
 export type CompanionDynamicTemplateKey =
   | "status_snapshot"
@@ -88,6 +93,9 @@ export interface CompanionTemplateContext {
   reviewedLast7Days?: number;
   stableCount?: number;
   overdueDays?: number;
+  encounterCount?: number;
+  streakDays?: number;
+  rescueCount?: number;
 }
 
 export interface CompanionStatusSignals {
@@ -123,7 +131,12 @@ export type CompanionEvent =
   | { type: "review_session_quit"; reviewedCount: number }
   | { type: "command_error"; errorMessage?: string }
   | { type: "idle_prompt" }
-  | { type: "shell_exit" };
+  | { type: "shell_exit" }
+  | { type: "re_capture_detection"; word: string; encounterCount: number }
+  | { type: "word_stabilized"; word: string }
+  | { type: "streak_milestone"; streakDays: number }
+  | { type: "rescue_complete_counter"; word: string; rescueCount: number }
+  | { type: "card_created"; word: string };
 
 export interface CompanionReactionResult {
   mood: CompanionMood;

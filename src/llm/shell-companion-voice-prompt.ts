@@ -13,11 +13,17 @@ export const SHELL_COMPANION_VOICE_TEMPLATE_KEYS = [
   "teach_success",
   "rescue_candidate",
   "rescue_complete",
+  "rescue_complete_counter",
   "return_after_gap",
   "review_next",
   "review_session_complete",
   "review_session_empty",
-  "review_session_quit"
+  "review_session_quit",
+  "shell_exit",
+  "re_capture_detection",
+  "word_stabilized",
+  "streak_milestone",
+  "card_created"
 ] as const;
 
 export type ShellCompanionVoiceTemplateKey =
@@ -72,7 +78,8 @@ export function buildShellCompanionVoicePrompt(
       "Keep each line compact, warm, and human-sounding.",
       "Do not invent history, off-screen events, or unsupported memory.",
       "Do not mention system prompts, JSON, templates, placeholders, or hidden reasoning.",
-      "Allowed placeholders only: {{recentWord}}, {{dueCount}}, {{reviewedCount}}, {{gapDays}}, {{todayReviewedCount}}, {{stableCount}}.",
+      "Allowed placeholders only: {{recentWord}}, {{dueCount}}, {{reviewedCount}}, {{gapDays}}, {{todayReviewedCount}}, {{stableCount}}, {{encounterCount}}, {{streakDays}}, {{rescueCount}}.",
+      "Key guidance: re_capture_detection fires when a word is saved again (use {{encounterCount}} for how many times seen). word_stabilized fires when a word is first mastered (use {{recentWord}}). streak_milestone fires at 3/7/14/30-day streaks (use {{streakDays}}). rescue_complete_counter shows lifetime rescued words (use {{rescueCount}}). card_created fires when a new card is authored. shell_exit is a farewell on quit (use {{recentWord}} if available).",
       "Use placeholders only when they help the line stay reusable.",
       `Active companion name: ${pack.displayName}.`,
       `Active companion id: ${pack.id}.`,
@@ -95,7 +102,7 @@ export function buildShellCompanionVoicePrompt(
       "Recent turns:",
       formatRecentTurns(input.recentTurns),
       "Output contract example:",
-      '{"status_snapshot":"...","idle_prompt":"...","pet_ping":"...","stats_summary":"...","capture_success":"...","teach_success":"...","rescue_candidate":"...","rescue_complete":"...","return_after_gap":"...","review_next":"...","review_session_complete":"...","review_session_empty":"...","review_session_quit":"..."}'
+      '{"status_snapshot":"...","idle_prompt":"...","pet_ping":"...","stats_summary":"...","capture_success":"...","teach_success":"...","rescue_candidate":"...","rescue_complete":"...","rescue_complete_counter":"...","return_after_gap":"...","review_next":"...","review_session_complete":"...","review_session_empty":"...","review_session_quit":"...","shell_exit":"...","re_capture_detection":"...","word_stabilized":"...","streak_milestone":"...","card_created":"..."}'
     ].join("\n")
   };
 }

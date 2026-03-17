@@ -25,7 +25,10 @@ const ALLOWED_PLACEHOLDERS = new Set([
   "reviewedCount",
   "gapDays",
   "todayReviewedCount",
-  "stableCount"
+  "stableCount",
+  "encounterCount",
+  "streakDays",
+  "rescueCount"
 ]);
 
 export interface ShellCompanionVoiceSettingsReader {

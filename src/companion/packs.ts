@@ -640,7 +640,10 @@ export function interpolateCompanionTemplate(
     .replaceAll("{{reviewedLast7Days}}", String(reviewedLast7Days))
     .replaceAll("{{stableCount}}", String(stableCount))
     .replaceAll("{{stableWord}}", stableWord)
-    .replaceAll("{{errorMessage}}", context.errorMessage ?? "something went wrong");
+    .replaceAll("{{errorMessage}}", context.errorMessage ?? "something went wrong")
+    .replaceAll("{{encounterCount}}", String(context.encounterCount ?? 0))
+    .replaceAll("{{streakDays}}", String(context.streakDays ?? 0))
+    .replaceAll("{{rescueCount}}", String(context.rescueCount ?? 0));
 }
 
 function pickTemplate(templates: string[], frame: number): string {

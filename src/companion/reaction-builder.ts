@@ -334,7 +334,82 @@ export function buildCompanionReaction(
         lineOverride: resolveReactionLine(
           pack,
           "shell_exit",
-          status,
+          {
+            ...status,
+            recentWord: status.recentWord
+          },
+          frame,
+          dynamicTemplates
+        )
+      };
+    case "re_capture_detection":
+      return {
+        mood: "curious",
+        lineOverride: resolveReactionLine(
+          pack,
+          "re_capture_detection",
+          {
+            ...status,
+            recentWord: event.word,
+            encounterCount: event.encounterCount
+          },
+          frame,
+          dynamicTemplates
+        )
+      };
+    case "word_stabilized":
+      return {
+        mood: "proud",
+        lineOverride: resolveReactionLine(
+          pack,
+          "word_stabilized",
+          {
+            ...status,
+            recentWord: event.word
+          },
+          frame,
+          dynamicTemplates
+        )
+      };
+    case "streak_milestone":
+      return {
+        mood: "proud",
+        lineOverride: resolveReactionLine(
+          pack,
+          "streak_milestone",
+          {
+            ...status,
+            streakDays: event.streakDays
+          },
+          frame,
+          dynamicTemplates
+        )
+      };
+    case "rescue_complete_counter":
+      return {
+        mood: "proud",
+        lineOverride: resolveReactionLine(
+          pack,
+          "rescue_complete_counter",
+          {
+            ...status,
+            recentWord: event.word,
+            rescueCount: event.rescueCount
+          },
+          frame,
+          dynamicTemplates
+        )
+      };
+    case "card_created":
+      return {
+        mood: "proud",
+        lineOverride: resolveReactionLine(
+          pack,
+          "card_created",
+          {
+            ...status,
+            recentWord: event.word
+          },
           frame,
           dynamicTemplates
         )
