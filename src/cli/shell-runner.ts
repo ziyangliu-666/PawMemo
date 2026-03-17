@@ -45,6 +45,7 @@ import {
   presentShellRescueIntro,
   presentShellReviewIntro,
   presentShellReviewSessionSummary,
+  formatShellStatsPanel,
   presentShellStatsResult,
   presentShellTeachResult
 } from "./shell-presenter";
@@ -1122,7 +1123,8 @@ export class ShellRunner {
     const natural = stableMilestone
       ? `${statsText}\n\n* ${stableMilestone} words stable.`
       : statsText;
-    this.writeAssistantReplyNow(natural);
+    const panel = formatShellStatsPanel(summary, stableMilestone);
+    this.writeAssistantReplyNow(panel);
     this.sessionState.recordActionResult(
       natural,
       JSON.stringify({

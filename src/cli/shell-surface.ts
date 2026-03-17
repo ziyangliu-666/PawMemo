@@ -729,11 +729,10 @@ export class TuiShellSurface extends BaseShellSurface {
         }
 
         if (this.slashSuggestions.length > 0) {
-          this.composerBuffer = `${this.slashSuggestions[this.suggestionIndex] ?? ""} `;
+          this.composerBuffer = this.slashSuggestions[this.suggestionIndex] ?? "";
           this.composerCursor = this.composerBuffer.length;
-          this.updateAutocompleteState();
-          this.renderFrame();
-          return false;
+          this.slashSuggestions = [];
+          this.suggestionIndex = 0;
         }
 
         return this.commitPromptSubmission();
@@ -1596,7 +1595,7 @@ export class TuiShellSurface extends BaseShellSurface {
       () => ""
     );
 
-    return [...padding, ...tail];
+    return [...tail, ...padding];
   }
 
   private renderLandingState(columns: number, height: number): string[] {
@@ -2070,7 +2069,7 @@ export class TuiShellSurface extends BaseShellSurface {
     return [
       this.theme.status(
         this.fitLine(
-          `${this.activeSelectionPrompt.request.promptText}  ${this.activeSelectionPrompt.selectedIndex + 1}/${this.activeSelectionPrompt.request.choices.length}  Tab/↑/↓ choose · Enter confirm`,
+          `${this.activeSelectionPrompt.request.promptText}  ↑/↓ choose · Enter confirm`,
           columns
         )
       )
@@ -2151,12 +2150,17 @@ export class TuiShellSurface extends BaseShellSurface {
   }
 
   private renderHeader(columns: number): string[] {
-    const headerText = this.dueCount > 0 
-      ? `${this.displayName} · ${this.shellMode} · ${this.dueCount} due`
-      : `${this.displayName} · ${this.shellMode}`;
+    if (this.dueCount > 0) {
+      const basePart = `${this.displayName} · ${this.shellMode} · `;
+      const duePart = `${this.dueCount} due`;
+      const fitted = this.fitLine(basePart + duePart, columns);
+      const fittedBase = fitted.slice(0, Math.min(basePart.length, fitted.length));
+      const fittedDue = fitted.slice(fittedBase.length);
+      return [this.theme.heading(fittedBase) + this.theme.warning(fittedDue)];
+    }
 
     return [
-      this.theme.heading(this.fitLine(headerText, columns))
+      this.theme.heading(this.fitLine(`${this.displayName} · ${this.shellMode}`, columns))
     ];
   }
 

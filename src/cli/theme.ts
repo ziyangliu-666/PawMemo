@@ -69,6 +69,7 @@ export interface CliTheme {
   prompt(text: string): string;
   status(text: string): string;
   statusAccent(text: string): string;
+  warning(text: string): string;
   error(text: string): string;
   assistantLine(text: string): string;
   assistantAccent(text: string): string;
@@ -273,6 +274,7 @@ export function createCliTheme(options: ThemeOptions): CliTheme {
     prompt,
     status,
     statusAccent,
+    warning,
     error,
     assistantLine,
     assistantAccent,

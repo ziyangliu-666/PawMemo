@@ -348,22 +348,8 @@ export function presentShellNoRescueCandidate(
 
 export function createShellReviewSessionCopy(): ReviewSessionCopy {
   return {
-    sessionHeading(limit?: number) {
-      const lines: Array<{ text: string; kind: "review-session-heading" | "review-card-field" }> = [
-        {
-          text: "Okay, here comes a short review lap.",
-          kind: "review-session-heading"
-        }
-      ];
-
-      if (typeof limit === "number") {
-        lines.push({
-          text: `We'll pause after ${limit} card${limit === 1 ? "" : "s"}.`,
-          kind: "review-card-field"
-        });
-      }
-
-      return lines;
+    sessionHeading(_limit?: number) {
+      return [];
     },
     noDueCards(reviewedCount) {
       return {
@@ -546,4 +532,23 @@ export function presentShellError(error: unknown): string {
   }
 
   return "Something slipped while I was handling that.";
+}
+
+export function formatShellStatsPanel(
+  summary: StatsSummaryResult,
+  stableMilestone: number | null
+): string {
+  const dueNew = summary.dueNewCount;
+  const dueReview = summary.dueReviewCount;
+  const dueTotal = summary.dueCount;
+  const stable = summary.masteryBreakdown.stable;
+
+  const milestoneNote = stableMilestone !== null ? ` · milestone: ${stableMilestone}` : "";
+
+  return [
+    `Due now:    ${dueTotal}  (${dueNew} new · ${dueReview} review)`,
+    `Today:      ${summary.todayReviewedCount} reviewed`,
+    `This week:  captured ${summary.capturedLast7Days} · reviewed ${summary.reviewedLast7Days}`,
+    `Stable:     ${stable}${milestoneNote}`
+  ].join("\n");
 }
