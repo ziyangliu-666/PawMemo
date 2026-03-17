@@ -152,11 +152,7 @@ export class OpenAiProvider implements LlmProvider {
               role: "user",
               content: request.userPrompt
             }
-          ],
-          response_format:
-            request.responseMimeType === "application/json"
-              ? { type: "json_object" }
-              : undefined
+          ]
         })
       },
       "OpenAI request"
