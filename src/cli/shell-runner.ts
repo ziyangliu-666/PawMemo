@@ -196,6 +196,7 @@ export class ShellRunner {
   private companionVoiceRefreshVersion = 0;
   private plannerMessageStreamStarted = false;
   private consecutiveProviderFailures = 0;
+  private readonly voiceRefreshAbort = new AbortController();
 
   constructor(options: ShellRunnerOptions) {
     const terminal = options.terminal ?? new ReadlineShellTerminal();
@@ -373,6 +374,7 @@ export class ShellRunner {
         }
       }
     } finally {
+      this.voiceRefreshAbort.abort();
       await this.surface.close();
     }
   }
@@ -754,12 +756,15 @@ export class ShellRunner {
       .map((turn) => `${turn.speaker}/${turn.kind}: ${turn.contentText}`);
 
     void this.companionVoiceWriter
-      .generate({
-        activePack: this.activePack,
-        statusSignals: status,
-        homeProjection: home,
-        recentTurns
-      })
+      .generate(
+        {
+          activePack: this.activePack,
+          statusSignals: status,
+          homeProjection: home,
+          recentTurns
+        },
+        { signal: this.voiceRefreshAbort.signal }
+      )
       .then((templates) => {
         if (
           refreshVersion !== this.companionVoiceRefreshVersion ||
