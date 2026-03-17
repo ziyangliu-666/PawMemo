@@ -1,225 +1,142 @@
 # PawMemo
 
 <p align="center">
-  <img src="./assets/readme/logo.png" alt="PawMemo logo" width="600">
+  <img src="./assets/readme/logo.png" alt="PawMemo logo" width="420">
 </p>
 
-LLM-native vocabulary companion for the terminal.
+<p align="center">
+  <strong>A terminal vocabulary companion — with character.</strong><br>
+  Capture words in context. Review with FSRS. Get nagged by a companion who has opinions about your study habits.
+</p>
 
-PawMemo is a terminal app for word learning with two fixed parts:
+<p align="center">
+  <img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen" alt="Node 22+">
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT">
+  <img src="https://img.shields.io/badge/platform-terminal-black" alt="Terminal">
+</p>
 
-- character-style chat and teaching
-- FSRS-style spaced review with local study state
+---
 
-It uses an LLM for the main product experience, while keeping word state, cards, and review progress in SQLite.
+## Review cards, not flashcard apps
 
-Current positioning:
+<p align="center">
+  <img src="./assets/readme/review-card.png" alt="PawMemo review card — recognition prompt" width="720">
+</p>
 
-- Anki-like vocabulary cards
-- an explicit FSRS-style scheduler direction
-- customizable character packs on top of one deterministic study system
+PawMemo shows you a word in its original context and asks you to recall the meaning. When you're ready, peek the answer — then rate it honestly.
+
+<p align="center">
+  <img src="./assets/readme/review-reveal.png" alt="PawMemo review card — revealed with FSRS rating" width="720">
+</p>
+
+Four ratings: **Again · Hard · Good · Easy**. The scheduler (FSRS-style, stability-aware) decides when you see it next. All state lives in a local SQLite file — nothing leaves your machine.
+
+---
+
+## A companion that stays in character
+
+<p align="center">
+  <img src="./assets/readme/airi-landing.png" alt="PawMemo — Airi's Study Nook" width="720">
+</p>
+
+The companion layer sits on top of the study engine. It can change tone, copy, and presentation — but it cannot change your review schedule or your word state. Three built-in packs:
+
+| Pack | Character | Tone |
+|------|-----------|------|
+| `momo` | Momo | Calm, minimal |
+| `girlfriend` | Mina | Present, warm |
+| `tsundere` | Airi | She's doing you a favor |
+
+```bash
+pawmemo config companion --pack tsundere
+```
+
+Airi makes her feelings known:
+
+```
+(｀_´)  哦，你终于来了。别在那打招呼了，赶紧把剩下的4个复习完，
+        我可没时间一直陪你耗着。
+```
+
+---
+
+## Study progress, always local
+
+<p align="center">
+  <img src="./assets/readme/stats.png" alt="PawMemo study stats" width="720">
+</p>
+
+`/stats` shows what's due, what you've reviewed today, and how many words have stabilized into long-term memory.
+
+---
 
 ## Install
 
 ```bash
-npm install
-npm run build
-npm link
+npm install && npm run build && npm link
 ```
 
-Run:
-
-```bash
-pawmemo
-```
-
-Or package it:
+Or from the packed tarball:
 
 ```bash
 npm pack
 npm install -g ./pawmemo-0.1.0.tgz
-pawmemo
 ```
 
-## Setup
-
-PawMemo requires an LLM provider.
+**Configure an LLM provider** (used for `ask`, `teach`, and companion chat):
 
 ```bash
-pawmemo config llm
-pawmemo config llm use --provider openai --model gpt-5-mini --api-key "your-key"
+pawmemo config llm use --provider openai --model gpt-4o-mini --api-key "sk-..."
 ```
 
-For a Windows-hosted local proxy that WSL can reach, PawMemo already supports an OpenAI-compatible base URL such as `http://172.24.160.1:7861/v1`.
-
-If you already keep a local Gemini/OpenAI-compatible reverse proxy on Windows, start it from that proxy repo and then configure PawMemo from WSL:
-
-```bash
-pawmemo config llm url --provider openai --api-url http://172.24.160.1:7861/v1
-```
+---
 
 ## Quick Start
 
-Capture a word:
-
 ```bash
-pawmemo capture luminous --ctx "The jellyfish gave off a luminous glow." --gloss "emitting light"
-```
+# Save a word with context
+pawmemo capture ephemeral --ctx "The beauty of the moment was ephemeral." --gloss "lasting a very short time"
 
-Start the shell:
+# Ask your companion to explain it
+pawmemo ask ephemeral --ctx "The beauty of the moment was ephemeral."
 
-```bash
+# Open the shell
 pawmemo
+
+# Inside the shell
+/review     # start a review session
+/rescue     # recover one overdue card
+/stats      # study progress
+/help       # all commands
 ```
 
-Common commands:
+---
 
-```text
-/help
-/review
-/rescue
-/stats
-/models
-/quit
+## Commands
+
+| Command | What it does |
+|---------|-------------|
+| `pawmemo` | Open the interactive shell |
+| `pawmemo capture <word>` | Save a word with context and gloss |
+| `pawmemo ask <word>` | Explain a word (no save) |
+| `pawmemo teach <word>` | Teach and save into study state |
+| `pawmemo review` | Run a review session |
+| `pawmemo rescue` | Recover one overdue item |
+| `pawmemo stats` | Show study progress |
+| `pawmemo pet` | Check companion status |
+
+Flags: `--db <path>` for a custom database path, `--line` for non-TUI terminals.
+
+---
+
+<details>
+<summary><strong>Architecture</strong></summary>
+
+<br>
+
+PawMemo is structured around one local study engine shared by the shell, direct CLI commands, and all companion packs.
+
 ```
-
-Direct commands:
-
-```bash
-pawmemo ask luminous --ctx "The jellyfish gave off a luminous glow."
-pawmemo teach lucid --ctx "Her explanation was lucid and easy to follow."
-pawmemo review
-pawmemo rescue
-pawmemo stats
-```
-
-Use a temporary database while testing:
-
-```bash
-pawmemo --db /tmp/pawmemo-dev.db
-```
-
-Use line mode if full-screen TUI does not work well in your terminal:
-
-```bash
-pawmemo --line --db /tmp/pawmemo-dev.db
-```
-
-Default landing view:
-
-![PawMemo shell landing view](./assets/readme/shell-landing.png)
-
-## Main Commands
-
-* `pawmemo` — open the shell
-* `capture` — save a word, context, and gloss
-* `review` — run review
-* `rescue` — recover one overdue item
-* `ask` — explain a word in context
-* `teach` — teach and save into study state
-* `stats` — show study progress
-* `pet` — show companion status
-
-Example explanation card in the shell:
-
-![PawMemo explanation card](./assets/readme/explanation-card.png)
-
-## Companion Packs
-
-Built-in packs:
-
-* `momo`
-* `girlfriend` (`Mina`)
-* `tsundere` (`Airi`)
-
-Preview tone snapshots:
-
-`momo`
-
-```text
-> 你好
-
-• 你好！很高兴见到你。
-```
-
-`girlfriend` / `Mina`
-
-```text
-> 你好
-
-• 你好呀。我在这里，准备好了。
-```
-
-`tsundere` / `Airi`
-
-```text
-> 你好
-
-• 哦，你终于来了。别在那打招呼了，赶紧把剩下的4个复习完，我可没时间一直陪你耗着。
-```
-
-Examples:
-
-```bash
-pawmemo config companion list
-pawmemo config companion --pack tsundere
-pawmemo pet --pack tsundere
-```
-
-## Architecture
-
-![PawMemo architecture overview](./assets/readme/structure.png)
-
-PawMemo is structured around one local study engine that both the shell and direct CLI commands use.
-
-The core architecture today is:
-
-- explicit study state stored in SQLite
-- Anki-style recognition and cloze cards
-- a deterministic, stability-aware, FSRS-style scheduler direction
-- LLM-assisted explanation and teaching on top of the same saved word state
-- companion packs layered downstream of study truth rather than owning it
-
-So the shortest accurate description is:
-
-- a local-first vocabulary CLI
-- with Anki-style cards
-- an FSRS-style review engine
-- and customizable companion roles
-
-More precise wording:
-
-- PawMemo is not claiming to be a drop-in FSRS implementation
-- it is claiming the current scheduler is PawMemo's own explicit implementation, designed in an FSRS-style direction rather than as ad hoc cooldown timers
-- companion packs can change tone, copy, and presentation, but they do not change review scheduling or canonical study state
-
-
-## Development
-
-```bash
-npm run build
-npm run typecheck
-npm run lint
-npm test
-npm pack
-```
-
-## CI And Release Packaging
-
-GitHub Actions should verify every push to `main` and every pull request with:
-
-```bash
-npm ci
-npm run typecheck
-npm run lint
-npm test
-npm pack
-```
-
-Creating and pushing a version tag such as `v0.1.0` should build the package tarball and attach it to the matching GitHub Release.
-
-```text
-assets/readme/     README images
 src/cli/          shell and commands
 src/core/         domain logic
 src/storage/      SQLite storage
@@ -227,6 +144,43 @@ src/review/       cards and scheduler
 src/companion/    packs and rendering
 test/             tests
 ```
+
+- Study state lives in SQLite — companion packs cannot change review scheduling or canonical word state
+- FSRS-style scheduler: stability-aware, deterministic, not ad hoc cooldown timers
+- LLM is a presentation layer only — explanation, teaching, companion tone — all downstream of study truth
+
+</details>
+
+<details>
+<summary><strong>Development</strong></summary>
+
+<br>
+
+```bash
+npm run build
+npm run typecheck
+npm run lint
+npm test
+npm pack
+```
+
+**CI (every push to `main`):**
+
+```bash
+npm ci && npm run typecheck && npm run lint && npm test && npm pack
+```
+
+Pushing a version tag like `v0.1.0` builds the tarball and attaches it to the matching GitHub Release.
+
+Local proxy (WSL → Windows OpenAI-compatible reverse proxy):
+
+```bash
+pawmemo config llm url --provider openai --api-url http://172.24.160.1:7861/v1
+```
+
+</details>
+
+---
 
 ## License
 
