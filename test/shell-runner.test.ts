@@ -380,7 +380,7 @@ test("ShellRunner reuses capture flow and updates companion output", async () =>
         `
           SELECT
             (SELECT COUNT(*) FROM lexemes) AS lexeme_count,
-            (SELECT COUNT(*) FROM review_cards) AS card_count
+            (SELECT COUNT(*) FROM study_card) AS card_count
         `
       )
       .get() as Record<string, number>;
@@ -1501,9 +1501,9 @@ test("ShellRunner accepts natural-language card workspace actions", async () => 
     const rows = db
       .prepare(
         `
-          SELECT id, answer_text, lifecycle_state
-          FROM review_cards
-          ORDER BY id ASC
+          SELECT sc.id, sc.answer_text, sc.lifecycle_state
+          FROM study_card sc
+          ORDER BY sc.id ASC
         `
       )
       .all() as Array<{ id: number; answer_text: string; lifecycle_state: string }>;

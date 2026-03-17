@@ -38,8 +38,8 @@ test("CaptureWordService stores lexeme, encounter, mastery, and cards", () => {
           SELECT
             (SELECT COUNT(*) FROM lexemes) AS lexeme_count,
             (SELECT COUNT(*) FROM word_encounters) AS encounter_count,
-            (SELECT COUNT(*) FROM word_mastery) AS mastery_count,
-            (SELECT COUNT(*) FROM review_cards) AS card_count,
+            (SELECT COUNT(*) FROM study_entry) AS mastery_count,
+            (SELECT COUNT(*) FROM study_card) AS card_count,
             (SELECT COUNT(*) FROM event_log) AS event_count
         `
       )

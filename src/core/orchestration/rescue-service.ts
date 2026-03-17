@@ -1,6 +1,6 @@
 import type { RescueCandidateResult, ReviewCardState } from "../domain/models";
 import { nowIso } from "../../lib/time";
-import { ReviewCardRepository } from "../../storage/repositories/review-card-repository";
+import { StudyCardRepository } from "../../storage/repositories/study-card-repository";
 import type { SqliteDatabase } from "../../storage/sqlite/database";
 
 const RESCUE_STATES: ReviewCardState[] = ["review", "relearning"];
@@ -11,10 +11,10 @@ function computeOverdueMinutes(dueAt: string, currentTime: string): number {
 }
 
 export class RescueService {
-  private readonly reviewCards: ReviewCardRepository;
+  private readonly reviewCards: StudyCardRepository;
 
   constructor(db: SqliteDatabase) {
-    this.reviewCards = new ReviewCardRepository(db);
+    this.reviewCards = new StudyCardRepository(db);
   }
 
   getCandidate(now?: string): RescueCandidateResult | null {

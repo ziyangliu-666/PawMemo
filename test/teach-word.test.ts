@@ -87,7 +87,7 @@ test("TeachWordService composes ask plus capture into persisted learning state",
           SELECT
             (SELECT COUNT(*) FROM lexemes) AS lexeme_count,
             (SELECT COUNT(*) FROM word_encounters) AS encounter_count,
-            (SELECT COUNT(*) FROM review_cards) AS card_count,
+            (SELECT COUNT(*) FROM study_card) AS card_count,
             (SELECT COUNT(*) FROM event_log WHERE event_type = 'word.taught') AS taught_events
         `
       )
@@ -130,7 +130,7 @@ test("TeachWordService can draft study cards before persistence", async () => {
         `
           SELECT
             (SELECT COUNT(*) FROM lexemes) AS lexeme_count,
-            (SELECT COUNT(*) FROM review_cards) AS card_count
+            (SELECT COUNT(*) FROM study_card) AS card_count
         `
       )
       .get() as Record<string, number>;
@@ -304,7 +304,7 @@ test("TeachWordService rejects explanation output without a usable provider glos
           SELECT
             (SELECT COUNT(*) FROM lexemes) AS lexeme_count,
             (SELECT COUNT(*) FROM word_encounters) AS encounter_count,
-            (SELECT COUNT(*) FROM review_cards) AS card_count
+            (SELECT COUNT(*) FROM study_card) AS card_count
         `
       )
       .get() as Record<string, number>;
@@ -359,7 +359,7 @@ test("TeachWordService rejects card-author output that cannot produce a clean st
           SELECT
             (SELECT COUNT(*) FROM lexemes) AS lexeme_count,
             (SELECT COUNT(*) FROM word_encounters) AS encounter_count,
-            (SELECT COUNT(*) FROM review_cards) AS card_count
+            (SELECT COUNT(*) FROM study_card) AS card_count
         `
       )
       .get() as Record<string, number>;

@@ -38,8 +38,10 @@ export class StatsQueryRepository {
       .prepare(
         `
           SELECT COUNT(*) AS count
-          FROM review_cards
-          WHERE state IN (${placeholders}) AND due_at <= ?
+          FROM study_card sc
+          JOIN card_learning_state cls ON cls.study_card_id = sc.id
+          WHERE cls.state IN (${placeholders}) AND cls.due_at <= ?
+            AND sc.lifecycle_state = 'active'
         `
       )
       .get(...states, now) as Record<string, unknown>;
@@ -95,9 +97,10 @@ export class StatsQueryRepository {
     const rows = this.db
       .prepare(
         `
-          SELECT state, COUNT(*) AS count
-          FROM word_mastery
-          GROUP BY state
+          SELECT ems.state, COUNT(*) AS count
+          FROM study_entry se
+          JOIN entry_memory_state ems ON ems.study_entry_id = se.id
+          GROUP BY ems.state
         `
       )
       .all() as Record<string, unknown>[];

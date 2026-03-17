@@ -2,10 +2,10 @@ import type {
   DueReviewCard,
   ListStudyCardsInput,
   ReviewCardDraft,
-  ReviewCardRecord,
   ReviewCardState,
   ReviewCardType,
-  StudyCardLifecycleState
+  StudyCardLifecycleState,
+  StudyCardRecord
 } from "../../core/domain/models";
 import type { SqliteDatabase } from "../sqlite/database";
 
@@ -13,7 +13,7 @@ function asLifecycleState(value: unknown): StudyCardLifecycleState {
   return value === "paused" || value === "archived" ? value : "active";
 }
 
-function mapReviewCard(row: Record<string, unknown>): ReviewCardRecord {
+function mapStudyCard(row: Record<string, unknown>): StudyCardRecord {
   return {
     id: Number(row.id),
     lexemeId: Number(row.lexeme_id),
@@ -44,20 +44,18 @@ function mapDueReviewCard(row: Record<string, unknown>): DueReviewCard {
   };
 }
 
-export class ReviewCardRepository {
+export class StudyCardRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
-  createMany(lexemeId: number, cards: ReviewCardDraft[], timestamp: string): ReviewCardRecord[] {
-    const insert = this.db.prepare(
+  createMany(lexemeId: number, cards: ReviewCardDraft[], timestamp: string): StudyCardRecord[] {
+    const insertCard = this.db.prepare(
       `
-        INSERT INTO review_cards (
+        INSERT INTO study_card (
           lexeme_id,
           card_type,
           prompt_text,
           answer_text,
-          state,
           lifecycle_state,
-          due_at,
           created_at,
           updated_at
         )
@@ -66,61 +64,77 @@ export class ReviewCardRepository {
           @cardType,
           @promptText,
           @answerText,
-          'new',
           'active',
-          @dueAt,
           @createdAt,
           @updatedAt
         )
       `
     );
-    const select = this.db.prepare(
+    const insertLearningState = this.db.prepare(
       `
-        SELECT
-          id,
-          lexeme_id,
-          card_type,
-          prompt_text,
-          answer_text,
+        INSERT INTO card_learning_state (
+          study_card_id,
           state,
-          lifecycle_state,
           due_at,
           created_at,
           updated_at
-        FROM review_cards
-        WHERE id = ?
+        )
+        VALUES (?, 'new', ?, ?, ?)
+      `
+    );
+    const selectCard = this.db.prepare(
+      `
+        SELECT
+          sc.id,
+          sc.lexeme_id,
+          sc.card_type,
+          sc.prompt_text,
+          sc.answer_text,
+          sc.lifecycle_state,
+          sc.created_at,
+          sc.updated_at,
+          cls.state,
+          cls.due_at
+        FROM study_card sc
+        JOIN card_learning_state cls ON cls.study_card_id = sc.id
+        WHERE sc.id = ?
       `
     );
 
-    const created: ReviewCardRecord[] = [];
+    const created: StudyCardRecord[] = [];
 
     for (const card of cards) {
-      const result = insert.run({
+      const result = insertCard.run({
         lexemeId,
         cardType: card.cardType,
         promptText: card.promptText,
         answerText: card.answerText,
-        dueAt: timestamp,
         createdAt: timestamp,
         updatedAt: timestamp
       });
-
-      const row = select.get(result.lastInsertRowid) as Record<string, unknown>;
-      created.push(mapReviewCard(row));
+      const cardId = Number(result.lastInsertRowid);
+      insertLearningState.run(cardId, timestamp, timestamp, timestamp);
+      const row = selectCard.get(cardId) as Record<string, unknown>;
+      created.push(mapStudyCard(row));
     }
 
     return created;
   }
 
   countDue(now: string, states: ReviewCardState[]): number {
+    if (states.length === 0) {
+      return 0;
+    }
+
     const placeholders = states.map(() => "?").join(", ");
     const row = this.db
       .prepare(
         `
           SELECT COUNT(*) AS count
-          FROM review_cards
-          WHERE state IN (${placeholders}) AND due_at <= ?
-            AND lifecycle_state = 'active'
+          FROM study_card sc
+          JOIN card_learning_state cls ON cls.study_card_id = sc.id
+          WHERE cls.state IN (${placeholders}) AND cls.due_at <= ?
+            AND sc.lifecycle_state = 'active'
         `
       )
       .get(...states, now) as Record<string, unknown>;
@@ -138,23 +152,24 @@ export class ReviewCardRepository {
       .prepare(
         `
           SELECT
-            review_cards.id,
-            review_cards.lexeme_id,
-            lexemes.lemma,
-            review_cards.card_type,
-            review_cards.prompt_text,
-            review_cards.answer_text,
-            review_cards.state,
-            review_cards.lifecycle_state,
-            review_cards.due_at,
-            review_cards.created_at,
-            review_cards.updated_at
-          FROM review_cards
-          INNER JOIN lexemes ON lexemes.id = review_cards.lexeme_id
-          WHERE review_cards.state IN (${placeholders})
-            AND review_cards.lifecycle_state = 'active'
-            AND review_cards.due_at <= ?
-          ORDER BY review_cards.due_at ASC, review_cards.id ASC
+            sc.id,
+            sc.lexeme_id,
+            l.lemma,
+            sc.card_type,
+            sc.prompt_text,
+            sc.answer_text,
+            sc.lifecycle_state,
+            sc.created_at,
+            sc.updated_at,
+            cls.state,
+            cls.due_at
+          FROM study_card sc
+          JOIN card_learning_state cls ON cls.study_card_id = sc.id
+          JOIN lexemes l ON l.id = sc.lexeme_id
+          WHERE cls.state IN (${placeholders})
+            AND sc.lifecycle_state = 'active'
+            AND cls.due_at <= ?
+          ORDER BY cls.due_at ASC, sc.id ASC
           LIMIT ?
         `
       )
@@ -168,20 +183,21 @@ export class ReviewCardRepository {
       .prepare(
         `
           SELECT
-            review_cards.id,
-            review_cards.lexeme_id,
-            lexemes.lemma,
-            review_cards.card_type,
-            review_cards.prompt_text,
-            review_cards.answer_text,
-            review_cards.state,
-            review_cards.lifecycle_state,
-            review_cards.due_at,
-            review_cards.created_at,
-            review_cards.updated_at
-          FROM review_cards
-          INNER JOIN lexemes ON lexemes.id = review_cards.lexeme_id
-          WHERE review_cards.id = ?
+            sc.id,
+            sc.lexeme_id,
+            l.lemma,
+            sc.card_type,
+            sc.prompt_text,
+            sc.answer_text,
+            sc.lifecycle_state,
+            sc.created_at,
+            sc.updated_at,
+            cls.state,
+            cls.due_at
+          FROM study_card sc
+          JOIN card_learning_state cls ON cls.study_card_id = sc.id
+          JOIN lexemes l ON l.id = sc.lexeme_id
+          WHERE sc.id = ?
         `
       )
       .get(cardId) as Record<string, unknown> | undefined;
@@ -203,12 +219,12 @@ export class ReviewCardRepository {
   ): DueReviewCard {
     this.db.prepare(
       `
-        UPDATE review_cards
+        UPDATE card_learning_state
         SET
           state = @state,
           due_at = @dueAt,
           updated_at = @updatedAt
-        WHERE id = @cardId
+        WHERE study_card_id = @cardId
       `
     ).run({
       cardId,
@@ -225,18 +241,18 @@ export class ReviewCardRepository {
     const params: Array<string | number> = [];
 
     if (input.word?.trim()) {
-      whereClauses.push("lexemes.normalized = ?");
+      whereClauses.push("l.normalized = ?");
       params.push(input.word.trim().toLowerCase());
     }
 
     if (input.cardType) {
-      whereClauses.push("review_cards.card_type = ?");
+      whereClauses.push("sc.card_type = ?");
       params.push(input.cardType);
     }
 
     if (input.lifecycleStates && input.lifecycleStates.length > 0) {
       const placeholders = input.lifecycleStates.map(() => "?").join(", ");
-      whereClauses.push(`review_cards.lifecycle_state IN (${placeholders})`);
+      whereClauses.push(`sc.lifecycle_state IN (${placeholders})`);
       params.push(...input.lifecycleStates);
     }
 
@@ -247,21 +263,22 @@ export class ReviewCardRepository {
       .prepare(
         `
           SELECT
-            review_cards.id,
-            review_cards.lexeme_id,
-            lexemes.lemma,
-            review_cards.card_type,
-            review_cards.prompt_text,
-            review_cards.answer_text,
-            review_cards.state,
-            review_cards.lifecycle_state,
-            review_cards.due_at,
-            review_cards.created_at,
-            review_cards.updated_at
-          FROM review_cards
-          INNER JOIN lexemes ON lexemes.id = review_cards.lexeme_id
+            sc.id,
+            sc.lexeme_id,
+            l.lemma,
+            sc.card_type,
+            sc.prompt_text,
+            sc.answer_text,
+            sc.lifecycle_state,
+            sc.created_at,
+            sc.updated_at,
+            cls.state,
+            cls.due_at
+          FROM study_card sc
+          JOIN card_learning_state cls ON cls.study_card_id = sc.id
+          JOIN lexemes l ON l.id = sc.lexeme_id
           ${whereSql}
-          ORDER BY lexemes.lemma COLLATE NOCASE ASC, review_cards.id ASC
+          ORDER BY l.lemma COLLATE NOCASE ASC, sc.id ASC
           LIMIT ?
         `
       )
@@ -286,7 +303,7 @@ export class ReviewCardRepository {
 
     this.db.prepare(
       `
-        UPDATE review_cards
+        UPDATE study_card
         SET
           prompt_text = @promptText,
           answer_text = @answerText,
@@ -310,7 +327,7 @@ export class ReviewCardRepository {
   ): DueReviewCard {
     this.db.prepare(
       `
-        UPDATE review_cards
+        UPDATE study_card
         SET
           lifecycle_state = @lifecycleState,
           updated_at = @updatedAt
@@ -328,7 +345,7 @@ export class ReviewCardRepository {
   delete(cardId: number): void {
     this.db.prepare(
       `
-        DELETE FROM review_cards
+        DELETE FROM study_card
         WHERE id = ?
       `
     ).run(cardId);

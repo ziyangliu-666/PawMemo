@@ -1,8 +1,8 @@
 import type {
   LexemeRecord,
+  StudyEntryRecord,
   WordEncounterRecord,
   WordKnowledgeSnapshot,
-  WordMasteryRecord,
   WordSenseRecord
 } from "../../core/domain/models";
 import type { SqliteDatabase } from "../sqlite/database";
@@ -32,17 +32,17 @@ function mapSense(row: Record<string, unknown>): WordSenseRecord {
   };
 }
 
-function mapMastery(row: Record<string, unknown>): WordMasteryRecord {
+function mapStudyEntry(row: Record<string, unknown>): StudyEntryRecord {
   return {
-    id: Number(row.mastery_id),
+    id: Number(row.entry_id),
     lexemeId: Number(row.lexeme_id),
-    state: row.state as WordMasteryRecord["state"],
+    state: row.state as StudyEntryRecord["state"],
     stability: Number(row.stability),
     difficulty: Number(row.difficulty),
     lastReviewedAt: nullableString(row.last_reviewed_at),
     nextDueAt: nullableString(row.next_due_at),
-    createdAt: String(row.mastery_created_at),
-    updatedAt: String(row.mastery_updated_at)
+    createdAt: String(row.entry_created_at),
+    updatedAt: String(row.entry_updated_at)
   };
 }
 
@@ -74,14 +74,14 @@ export class WordQueryRepository {
             word_senses.gloss,
             word_senses.example_context,
             word_senses.created_at AS sense_created_at,
-            word_mastery.id AS mastery_id,
-            word_mastery.state,
-            word_mastery.stability,
-            word_mastery.difficulty,
-            word_mastery.last_reviewed_at,
-            word_mastery.next_due_at,
-            word_mastery.created_at AS mastery_created_at,
-            word_mastery.updated_at AS mastery_updated_at
+            se.id AS entry_id,
+            ems.state,
+            ems.stability,
+            ems.difficulty,
+            ems.last_reviewed_at,
+            ems.next_due_at,
+            se.created_at AS entry_created_at,
+            se.updated_at AS entry_updated_at
           FROM lexemes
           LEFT JOIN word_senses
             ON word_senses.id = (
@@ -91,8 +91,10 @@ export class WordQueryRepository {
               ORDER BY ws.id DESC
               LIMIT 1
             )
-          LEFT JOIN word_mastery
-            ON word_mastery.lexeme_id = lexemes.id
+          LEFT JOIN study_entry se
+            ON se.lexeme_id = lexemes.id
+          LEFT JOIN entry_memory_state ems
+            ON ems.study_entry_id = se.id
           WHERE lexemes.normalized = ?
         `
       )
@@ -108,7 +110,7 @@ export class WordQueryRepository {
     return {
       lexeme,
       sense: row.sense_id === null ? null : mapSense(row),
-      mastery: row.mastery_id === null ? null : mapMastery(row),
+      mastery: row.entry_id === null ? null : mapStudyEntry(row),
       recentEncounters
     };
   }

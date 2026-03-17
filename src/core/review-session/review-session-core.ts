@@ -11,8 +11,8 @@ import { NotFoundError, ReviewCardNotDueError, UsageError } from "../../lib/erro
 import { nowIso } from "../../lib/time";
 import { scheduleReview } from "../../review/scheduler";
 import { EventLogRepository } from "../../storage/repositories/event-log-repository";
-import { MasteryRepository } from "../../storage/repositories/mastery-repository";
-import { ReviewCardRepository } from "../../storage/repositories/review-card-repository";
+import { StudyEntryRepository } from "../../storage/repositories/study-entry-repository";
+import { StudyCardRepository } from "../../storage/repositories/study-card-repository";
 import { ReviewHistoryRepository } from "../../storage/repositories/review-history-repository";
 import { UserPreferenceRepository } from "../../storage/repositories/user-preference-repository";
 import type { SqliteDatabase } from "../../storage/sqlite/database";
@@ -20,16 +20,16 @@ import type { SqliteDatabase } from "../../storage/sqlite/database";
 const VALID_GRADES = new Set(["again", "hard", "good", "easy"]);
 
 export class ReviewSessionCore {
-  private readonly reviewCards: ReviewCardRepository;
+  private readonly reviewCards: StudyCardRepository;
   private readonly preferences: UserPreferenceRepository;
-  private readonly mastery: MasteryRepository;
+  private readonly mastery: StudyEntryRepository;
   private readonly history: ReviewHistoryRepository;
   private readonly eventLog: EventLogRepository;
 
   constructor(private readonly db: SqliteDatabase) {
-    this.reviewCards = new ReviewCardRepository(db);
+    this.reviewCards = new StudyCardRepository(db);
     this.preferences = new UserPreferenceRepository(db);
-    this.mastery = new MasteryRepository(db);
+    this.mastery = new StudyEntryRepository(db);
     this.history = new ReviewHistoryRepository(db);
     this.eventLog = new EventLogRepository(db);
   }

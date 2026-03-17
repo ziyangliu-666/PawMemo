@@ -182,6 +182,92 @@ const MIGRATIONS: Migration[] = [
         ON review_cards(lifecycle_state, state, due_at)
       `
     ]
+  },
+  {
+    version: 4,
+    statements: [
+      `DROP TABLE IF EXISTS review_history`,
+      `DROP TABLE IF EXISTS review_cards`,
+      `DROP TABLE IF EXISTS word_mastery`,
+      `
+        CREATE TABLE study_card (
+          id INTEGER PRIMARY KEY,
+          lexeme_id INTEGER NOT NULL,
+          card_type TEXT NOT NULL,
+          prompt_text TEXT NOT NULL,
+          answer_text TEXT NOT NULL,
+          lifecycle_state TEXT NOT NULL DEFAULT 'active',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (lexeme_id) REFERENCES lexemes(id) ON DELETE CASCADE
+        )
+      `,
+      `
+        CREATE INDEX IF NOT EXISTS idx_study_card_lexeme
+        ON study_card(lexeme_id)
+      `,
+      `
+        CREATE INDEX IF NOT EXISTS idx_study_card_lifecycle
+        ON study_card(lifecycle_state)
+      `,
+      `
+        CREATE TABLE card_learning_state (
+          id INTEGER PRIMARY KEY,
+          study_card_id INTEGER NOT NULL UNIQUE,
+          state TEXT NOT NULL,
+          due_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (study_card_id) REFERENCES study_card(id) ON DELETE CASCADE
+        )
+      `,
+      `
+        CREATE INDEX IF NOT EXISTS idx_card_learning_state_due
+        ON card_learning_state(state, due_at)
+      `,
+      `
+        CREATE TABLE study_entry (
+          id INTEGER PRIMARY KEY,
+          lexeme_id INTEGER NOT NULL UNIQUE,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (lexeme_id) REFERENCES lexemes(id) ON DELETE CASCADE
+        )
+      `,
+      `
+        CREATE TABLE entry_memory_state (
+          id INTEGER PRIMARY KEY,
+          study_entry_id INTEGER NOT NULL UNIQUE,
+          state TEXT NOT NULL,
+          stability REAL NOT NULL DEFAULT 0,
+          difficulty REAL NOT NULL DEFAULT 0,
+          last_reviewed_at TEXT,
+          next_due_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (study_entry_id) REFERENCES study_entry(id) ON DELETE CASCADE
+        )
+      `,
+      `
+        CREATE TABLE review_history (
+          id INTEGER PRIMARY KEY,
+          study_card_id INTEGER NOT NULL,
+          grade TEXT NOT NULL,
+          reviewed_at TEXT NOT NULL,
+          scheduled_days REAL NOT NULL DEFAULT 0,
+          stability_after REAL NOT NULL DEFAULT 0,
+          FOREIGN KEY (study_card_id) REFERENCES study_card(id) ON DELETE CASCADE
+        )
+      `,
+      `
+        CREATE INDEX IF NOT EXISTS idx_review_history_card
+        ON review_history(study_card_id)
+      `,
+      `
+        CREATE INDEX IF NOT EXISTS idx_review_history_reviewed_at
+        ON review_history(reviewed_at)
+      `
+    ]
   }
 ];
 

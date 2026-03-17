@@ -49,7 +49,7 @@ export interface WordEncounterRecord {
   capturedAt: string;
 }
 
-export interface WordMasteryRecord {
+export interface StudyEntryRecord {
   id: number;
   lexemeId: number;
   state: MasteryState;
@@ -61,7 +61,7 @@ export interface WordMasteryRecord {
   updatedAt: string;
 }
 
-export interface ReviewCardRecord {
+export interface StudyCardRecord {
   id: number;
   lexemeId: number;
   cardType: ReviewCardType;
@@ -173,8 +173,8 @@ export interface CaptureWordResult {
   lexeme: LexemeRecord;
   sense: WordSenseRecord;
   encounter: WordEncounterRecord;
-  mastery: WordMasteryRecord;
-  cards: ReviewCardRecord[];
+  mastery: StudyEntryRecord;
+  cards: StudyCardRecord[];
 }
 
 export interface ReviewQueueResult {
@@ -209,7 +209,7 @@ export interface GradeReviewCardInput {
 
 export interface GradeReviewCardResult {
   card: DueReviewCard;
-  mastery: WordMasteryRecord;
+  mastery: StudyEntryRecord;
   grade: ReviewGrade;
   scheduledDays: number;
 }
@@ -237,7 +237,7 @@ export interface LlmSettings {
 export interface WordKnowledgeSnapshot {
   lexeme: LexemeRecord;
   sense: WordSenseRecord | null;
-  mastery: WordMasteryRecord | null;
+  mastery: StudyEntryRecord | null;
   recentEncounters: WordEncounterRecord[];
 }
 

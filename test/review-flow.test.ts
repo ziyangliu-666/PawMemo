@@ -44,9 +44,9 @@ test("ReviewService prioritizes due review cards ahead of new cards within prefe
 
     db.prepare(
       `
-        UPDATE review_cards
+        UPDATE card_learning_state
         SET state = 'review', due_at = '2026-03-11T00:00:00.000Z'
-        WHERE id = 1
+        WHERE study_card_id = 1
       `
     ).run();
 

@@ -18,7 +18,7 @@ import {
 } from "../../lib/errors";
 import { EventLogRepository } from "../../storage/repositories/event-log-repository";
 import { LexemeRepository } from "../../storage/repositories/lexeme-repository";
-import { ReviewCardRepository } from "../../storage/repositories/review-card-repository";
+import { StudyCardRepository } from "../../storage/repositories/study-card-repository";
 import type { SqliteDatabase } from "../../storage/sqlite/database";
 
 function normalizeWord(word: string): string {
@@ -44,12 +44,12 @@ function describeSelector(selector: StudyCardSelector): string {
 
 export class CardWorkspaceService {
   private readonly lexemes: LexemeRepository;
-  private readonly reviewCards: ReviewCardRepository;
+  private readonly reviewCards: StudyCardRepository;
   private readonly eventLog: EventLogRepository;
 
   constructor(private readonly db: SqliteDatabase) {
     this.lexemes = new LexemeRepository(db);
-    this.reviewCards = new ReviewCardRepository(db);
+    this.reviewCards = new StudyCardRepository(db);
     this.eventLog = new EventLogRepository(db);
   }
 

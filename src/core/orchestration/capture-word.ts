@@ -5,8 +5,8 @@ import { nowIso } from "../../lib/time";
 import { EncounterRepository } from "../../storage/repositories/encounter-repository";
 import { EventLogRepository } from "../../storage/repositories/event-log-repository";
 import { LexemeRepository } from "../../storage/repositories/lexeme-repository";
-import { MasteryRepository } from "../../storage/repositories/mastery-repository";
-import { ReviewCardRepository } from "../../storage/repositories/review-card-repository";
+import { StudyEntryRepository } from "../../storage/repositories/study-entry-repository";
+import { StudyCardRepository } from "../../storage/repositories/study-card-repository";
 import type { SqliteDatabase } from "../../storage/sqlite/database";
 
 function normalizeWord(word: string): string {
@@ -26,15 +26,15 @@ function requireValue(name: string, value: string): string {
 export class CaptureWordService {
   private readonly lexemes: LexemeRepository;
   private readonly encounters: EncounterRepository;
-  private readonly mastery: MasteryRepository;
-  private readonly reviewCards: ReviewCardRepository;
+  private readonly studyEntry: StudyEntryRepository;
+  private readonly studyCards: StudyCardRepository;
   private readonly eventLog: EventLogRepository;
 
   constructor(private readonly db: SqliteDatabase) {
     this.lexemes = new LexemeRepository(db);
     this.encounters = new EncounterRepository(db);
-    this.mastery = new MasteryRepository(db);
-    this.reviewCards = new ReviewCardRepository(db);
+    this.studyEntry = new StudyEntryRepository(db);
+    this.studyCards = new StudyCardRepository(db);
     this.eventLog = new EventLogRepository(db);
   }
 
@@ -66,8 +66,8 @@ export class CaptureWordService {
         input.sourceLabel,
         capturedAt
       );
-      const mastery = this.mastery.ensureSeen(lexeme.id, capturedAt);
-      const cards = this.reviewCards.createMany(lexeme.id, seeds, capturedAt);
+      const mastery = this.studyEntry.ensureSeen(lexeme.id, capturedAt);
+      const cards = this.studyCards.createMany(lexeme.id, seeds, capturedAt);
 
       this.eventLog.append(
         "word.captured",

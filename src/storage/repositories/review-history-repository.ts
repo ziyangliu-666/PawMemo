@@ -5,7 +5,7 @@ export class ReviewHistoryRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
   create(
-    reviewCardId: number,
+    studyCardId: number,
     grade: ReviewGrade,
     reviewedAt: string,
     scheduledDays: number,
@@ -14,7 +14,7 @@ export class ReviewHistoryRepository {
     this.db.prepare(
       `
         INSERT INTO review_history (
-          review_card_id,
+          study_card_id,
           grade,
           reviewed_at,
           scheduled_days,
@@ -22,6 +22,6 @@ export class ReviewHistoryRepository {
         )
         VALUES (?, ?, ?, ?, ?)
       `
-    ).run(reviewCardId, grade, reviewedAt, scheduledDays, stabilityAfter);
+    ).run(studyCardId, grade, reviewedAt, scheduledDays, stabilityAfter);
   }
 }

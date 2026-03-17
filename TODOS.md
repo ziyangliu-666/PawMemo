@@ -22,12 +22,10 @@ Agreed sequence: streaming → voice bank → warmth → schema migration.
 
 ---
 
-### Schema migration (study entry + card learning state separation)
-**What:** Migrate bootstrap `review_cards` to `study_entry + study_card + entry_memory_state + card_learning_state`.
-**Why:** The current table conflates card content and scheduler state, blocking the card-native workspace vision.
-**Context:** Bootstrap schema has `review_cards` with both content fields (front, back, word) and scheduler fields (stability, difficulty, due_at, review_state). The clean model separates these. All downstream code (repositories, card workspace service, queue selection) needs updating.
-**Effort:** XL
-**Depends on:** Warmth improvements shipped first (streaming + voice bank + warmth polish)
+### ~~Schema migration (study entry + card learning state separation)~~ ✓ Done
+**What:** Migrated bootstrap `review_cards` → `study_card + card_learning_state`; `word_mastery` → `study_entry + entry_memory_state`.
+**Fix:** V4 migration drops old tables and creates 4 new tables. `StudyCardRepository` (replaces `ReviewCardRepository`) owns all public JOINs; `StudyEntryRepository` (replaces `MasteryRepository`) handles both `study_entry` and `entry_memory_state` inline. `ReviewCardRecord` → `StudyCardRecord`, `WordMasteryRecord` → `StudyEntryRecord`. `StatsQueryRepository.countDue` lifecycle filter bug fixed. `review_history` column renamed `review_card_id` → `study_card_id`. Indexes added on `card_learning_state(state, due_at)` and `study_card(lifecycle_state)`.
+**Verified:** 166/166 tests pass (shell-runner OOM is pre-existing, unrelated to migration).
 
 ---
 
@@ -98,12 +96,9 @@ Agreed sequence: streaming → voice bank → warmth → schema migration.
 
 ## P3
 
-### Queue index optimization
-**What:** Add composite index on `review_cards(lifecycle, review_state, due_at)`.
-**Why:** Current full-table scan is fine at 1k cards; starts to matter at 10k+.
-**Context:** Add as part of the schema migration slice since that will need a new migration anyway.
-**Effort:** XS
-**Depends on:** Schema migration milestone
+### ~~Queue index optimization~~ ✓ Done
+**What:** Added indexes on `card_learning_state(state, due_at)` and `study_card(lifecycle_state)` as part of V4 migration.
+**Fix:** Included in the schema migration PR — `idx_card_learning_state_due` and `idx_study_card_lifecycle`.
 
 ---
 

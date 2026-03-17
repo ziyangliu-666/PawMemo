@@ -57,7 +57,7 @@ test("ReviewService returns the answer side without changing scheduling state", 
     assert.match(result.card.answerText, /luminous/);
 
     const row = db
-      .prepare("SELECT state, due_at FROM review_cards WHERE id = 2")
+      .prepare("SELECT cls.state, cls.due_at FROM card_learning_state cls WHERE cls.study_card_id = 2")
       .get() as Record<string, string>;
 
     assert.equal(row.state, "new");

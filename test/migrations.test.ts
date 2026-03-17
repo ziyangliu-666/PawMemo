@@ -126,3 +126,38 @@ test("runMigrations upgrades a legacy database and drops dead tables", () => {
     fs.rmSync(dbPath, { force: true });
   }
 });
+
+test("V4 migration: new tables exist, old tables are gone, review_history uses study_card_id", () => {
+  const dbPath = tempDbPath("migrations-v4");
+  const db = openDatabase(dbPath);
+
+  try {
+    const tableNames = db
+      .prepare<[], { name: string }>(
+        `SELECT name FROM sqlite_master WHERE type = 'table'`
+      )
+      .all()
+      .map((row) => row.name);
+
+    assert.ok(tableNames.includes("study_card"), "study_card table should exist");
+    assert.ok(tableNames.includes("card_learning_state"), "card_learning_state table should exist");
+    assert.ok(tableNames.includes("study_entry"), "study_entry table should exist");
+    assert.ok(tableNames.includes("entry_memory_state"), "entry_memory_state table should exist");
+    assert.ok(tableNames.includes("review_history"), "review_history table should exist");
+    assert.ok(!tableNames.includes("review_cards"), "review_cards table should be gone");
+    assert.ok(!tableNames.includes("word_mastery"), "word_mastery table should be gone");
+
+    const historyColumns = db
+      .prepare<[], { name: string }>(
+        `SELECT name FROM pragma_table_info('review_history')`
+      )
+      .all()
+      .map((row) => row.name);
+
+    assert.ok(historyColumns.includes("study_card_id"), "review_history should have study_card_id column");
+    assert.ok(!historyColumns.includes("review_card_id"), "review_history should not have old review_card_id column");
+  } finally {
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});

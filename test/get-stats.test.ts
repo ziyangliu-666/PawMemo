@@ -7,6 +7,7 @@ import path from "node:path";
 import { CaptureWordService } from "../src/core/orchestration/capture-word";
 import { GetCompanionSignalsService } from "../src/core/orchestration/get-companion-signals";
 import { ReviewService } from "../src/core/orchestration/review-service";
+import { CardWorkspaceService } from "../src/core/orchestration/card-workspace-service";
 import { openDatabase } from "../src/storage/sqlite/database";
 
 function tempDbPath(name: string): string {
@@ -58,6 +59,38 @@ test("GetCompanionSignalsService summarizes due work, recent activity, and maste
     assert.equal(summary.lastReviewedAt, "2026-03-12T11:00:00.000Z");
     assert.equal(summary.hoursSinceLastReview, 1);
     assert.equal(summary.daysSinceLastReview, 0);
+  } finally {
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+  }
+});
+
+test("dueCount excludes paused and archived cards", () => {
+  const dbPath = tempDbPath("stats-lifecycle-filter");
+  const db = openDatabase(dbPath);
+
+  try {
+    const captureService = new CaptureWordService(db);
+    const statsService = new GetCompanionSignalsService(db);
+    const cardWorkspace = new CardWorkspaceService(db);
+
+    captureService.capture({
+      word: "luminous",
+      context: "The jellyfish gave off a luminous glow.",
+      gloss: "emitting light",
+      capturedAt: "2026-03-10T09:00:00.000Z"
+    });
+
+    const now = "2026-03-10T12:00:00.000Z";
+    const before = statsService.getSignals(now);
+    assert.ok(before.dueCount >= 1, "at least one card should be due after capture");
+
+    const cards = cardWorkspace.listCards({ word: "luminous" });
+    const firstCardId = cards.cards[0].id;
+    cardWorkspace.execute({ kind: "set-lifecycle", input: { selector: { cardId: firstCardId }, lifecycleState: "paused" } });
+
+    const after = statsService.getSignals(now);
+    assert.equal(after.dueCount, before.dueCount - 1, "paused card should be excluded from dueCount");
   } finally {
     db.close();
     fs.rmSync(dbPath, { force: true });

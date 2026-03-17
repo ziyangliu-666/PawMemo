@@ -79,7 +79,12 @@ test("ReviewSessionRunner grades one card and stops at the session limit", async
     );
 
     const dueRows = db
-      .prepare("SELECT COUNT(*) AS count FROM review_cards WHERE due_at <= ?")
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM study_card sc
+         JOIN card_learning_state cls ON cls.study_card_id = sc.id
+         WHERE cls.due_at <= ?`
+      )
       .get("2026-03-12T12:00:00.000Z") as { count: number };
 
     assert.equal(dueRows.count, 1);
