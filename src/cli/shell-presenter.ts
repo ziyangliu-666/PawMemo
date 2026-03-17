@@ -348,7 +348,7 @@ export function presentShellNoRescueCandidate(
 
 export function createShellReviewSessionCopy(): ReviewSessionCopy {
   return {
-    sessionHeading(_limit?: number) {
+    sessionHeading() {
       return [];
     },
     noDueCards(reviewedCount) {

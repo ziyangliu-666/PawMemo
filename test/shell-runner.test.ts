@@ -7,8 +7,6 @@ import path from "node:path";
 import { ShellRunner } from "../src/cli/shell-runner";
 import { CaptureWordService } from "../src/core/orchestration/capture-word";
 import { ReviewService } from "../src/core/orchestration/review-service";
-import type { LlmModelInfo } from "../src/core/domain/models";
-import { ProviderRequestError } from "../src/lib/errors";
 import type {
   LlmProvider,
   LlmTextRequest,
@@ -38,14 +36,6 @@ class FakeShellTerminal {
   }
 
   close(): void {}
-}
-
-class FakeStreamingShellTerminal extends FakeShellTerminal {
-  readonly rawWrites: string[] = [];
-
-  writeRaw(text: string): void {
-    this.rawWrites.push(text);
-  }
 }
 
 class FakeGeminiProvider implements LlmProvider {
@@ -324,23 +314,6 @@ class FakeGeminiProvider implements LlmProvider {
     }
 
     return this.generateText(request);
-  }
-}
-
-class SlowFakeGeminiProvider extends FakeGeminiProvider {
-  async generateText(request: LlmTextRequest): Promise<LlmTextResponse> {
-    await new Promise((resolve) => setTimeout(resolve, 220));
-    return super.generateText(request);
-  }
-}
-
-class TimeoutFakeGeminiProvider extends FakeGeminiProvider {
-  async generateText(): Promise<LlmTextResponse> {
-    throw new ProviderRequestError("The OpenAI request timed out after 30s.");
-  }
-
-  async generateTextStream(): Promise<LlmTextResponse> {
-    throw new ProviderRequestError("The OpenAI request timed out after 30s.");
   }
 }
 

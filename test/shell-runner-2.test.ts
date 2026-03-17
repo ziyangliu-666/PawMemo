@@ -7,7 +7,6 @@ import path from "node:path";
 import { ShellRunner } from "../src/cli/shell-runner";
 import { CaptureWordService } from "../src/core/orchestration/capture-word";
 import { ReviewService } from "../src/core/orchestration/review-service";
-import type { LlmModelInfo } from "../src/core/domain/models";
 import { ProviderRequestError } from "../src/lib/errors";
 import type {
   LlmProvider,
@@ -15,8 +14,6 @@ import type {
   LlmTextResponse,
   LlmTextStreamRequest
 } from "../src/llm/types";
-import { nowIso } from "../src/lib/time";
-import { AppSettingsRepository } from "../src/storage/repositories/app-settings-repository";
 import { openDatabase } from "../src/storage/sqlite/database";
 
 function tempDbPath(name: string): string {

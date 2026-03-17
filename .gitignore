@@ -10,3 +10,4 @@ coverage/
 *.db
 *.db-shm
 *.db-wal
+.gstack/
