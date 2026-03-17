@@ -21,6 +21,16 @@ function mapEncounter(row: Record<string, unknown>): WordEncounterRecord {
 export class EncounterRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
+  countByLexemeId(lexemeId: number): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) as count FROM word_encounters WHERE lexeme_id = ?`
+      )
+      .get(lexemeId) as { count: number };
+
+    return row.count;
+  }
+
   create(
     lexemeId: number,
     contextText: string,

@@ -45,6 +45,8 @@ import {
   type LlmStatusSummary
 } from "../llm/llm-config-service";
 import type { SqliteDatabase } from "../storage/sqlite/database";
+import { EncounterRepository } from "../storage/repositories/encounter-repository";
+import { LexemeRepository } from "../storage/repositories/lexeme-repository";
 import {
   createStudyReviewSessionServices,
   createDefaultReviewSessionTerminal,
@@ -89,6 +91,8 @@ export class ShellActionExecutor {
   private readonly study: StudyServices;
   private readonly llmConfig: LlmConfigService;
   private readonly settings: AppSettingsRepository;
+  private readonly lexemes: LexemeRepository;
+  private readonly encounters: EncounterRepository;
 
   constructor(
     db: SqliteDatabase,
@@ -97,6 +101,19 @@ export class ShellActionExecutor {
     this.study = new StudyServices(db, providerFactory);
     this.llmConfig = new LlmConfigService(db, providerFactory);
     this.settings = new AppSettingsRepository(db);
+    this.lexemes = new LexemeRepository(db);
+    this.encounters = new EncounterRepository(db);
+  }
+
+  getEncounterCount(word: string): number {
+    const normalized = word.trim().toLowerCase();
+    const lexeme = this.lexemes.findByNormalized(normalized);
+
+    if (!lexeme) {
+      return 0;
+    }
+
+    return this.encounters.countByLexemeId(lexeme.id);
   }
 
   capture(input: CaptureWordInput): CaptureWordResult {

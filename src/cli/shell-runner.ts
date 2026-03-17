@@ -21,7 +21,7 @@ import type {
   TeachWordInput
 } from "../core/domain/models";
 import type { LlmProvider } from "../llm/types";
-import { CardSelectionError, ConfigurationError, UsageError } from "../lib/errors";
+import { CardSelectionError, ConfigurationError, DuplicateEncounterError, UsageError } from "../lib/errors";
 import type { SqliteDatabase } from "../storage/sqlite/database";
 import {
   formatNextReviewCard,
@@ -1145,12 +1145,20 @@ export class ShellRunner {
             returnAfterGap: reviewSession.returnAfterGap
           })
         );
-        this.applyReaction(
-          buildReviewSessionCompanionEvent(
-            reviewSession.result,
-            reviewSession.returnAfterGap
-          )
+        const sessionCompanionEvent = buildReviewSessionCompanionEvent(
+          reviewSession.result,
+          reviewSession.returnAfterGap
         );
+        const newlyStableWord =
+          reviewSession.signalsAfter.stableCount > reviewSession.signalsBefore.stableCount
+            ? (reviewSession.signalsAfter.recentWord ?? null)
+            : null;
+        this.applyReaction(sessionCompanionEvent);
+
+        if (newlyStableWord) {
+          this.applyReaction({ type: "word_stabilized", word: newlyStableWord });
+        }
+
         this.scheduleCompanionVoiceRefresh("review-complete");
         return;
       }
@@ -1405,7 +1413,30 @@ export class ShellRunner {
 
   private runCaptureInput(input: CaptureWordInput): void {
     const startedAt = performance.now();
-    const result = this.executor.capture(input);
+    let result: ReturnType<typeof this.executor.capture>;
+
+    try {
+      result = this.executor.capture(input);
+    } catch (error) {
+      if (error instanceof DuplicateEncounterError) {
+        const encounterCount = this.executor.getEncounterCount(input.word);
+        const natural = `I've already got ${input.word} in the pile.`;
+        this.writeAssistantReplyNow(natural);
+        this.sessionState.recordActionResult(
+          natural,
+          JSON.stringify({ type: "re-capture", word: input.word, encounterCount })
+        );
+        this.applyReaction({
+          type: "re_capture_detection",
+          word: input.word,
+          encounterCount
+        });
+        return;
+      }
+
+      throw error;
+    }
+
     const natural = presentShellCaptureResult(result);
 
     this.writeAssistantReplyNow(natural);
