@@ -60,12 +60,9 @@ Agreed sequence: streaming → voice bank → warmth → schema migration.
 
 ---
 
-### GitHub Release automation
+### ~~GitHub Release automation~~ ✓ Already done
 **What:** GitHub Actions workflow that attaches `.tgz` to GitHub Release on version tags.
-**Why:** v0.1.0 is packaged but no formal release created. Manual releases are fragile.
-**Context:** CI already runs `npm pack`. Add one workflow triggered by `v*` tags: build → npm pack → create GitHub Release → attach `.tgz`. Follows existing CI pattern.
-**Effort:** S
-**Depends on:** None
+**Fix:** `.github/workflows/release-package.yml` already exists — triggered on `v*` tags, runs typecheck/lint/test, packs tarball, creates or uploads to GitHub Release via `gh release create/upload`.
 
 ---
 
@@ -134,12 +131,9 @@ Agreed sequence: streaming → voice bank → warmth → schema migration.
 
 ---
 
-### Stable word collection milestone moments
+### ~~Stable word collection milestone moments~~ ✓ Done
 **What:** Detect milestone stable-word counts (10/25/50/100/250) in stats and surface a companion moment.
-**Why:** "✶ 50 words stable!" marks long-term progress in a way raw counts don't.
-**Context:** `CompanionSignals` already has `stableCount`. In `presentShellStatsResult`, check if `stableCount` crosses a milestone threshold. Surface a one-line companion moment after the stats block.
-**Effort:** XS
-**Depends on:** None
+**Fix:** In `runStats`, check `masteryBreakdown.stable` against `STABLE_MILESTONES = [10, 25, 50, 100, 250]`. When exactly at a milestone, appends `\n\n* N words stable.` to the stats reply text.
 
 ---
 

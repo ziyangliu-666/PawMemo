@@ -1074,10 +1074,19 @@ export class ShellRunner {
     this.sessionState.recordError(natural);
   }
 
+  private static readonly STABLE_MILESTONES = [10, 25, 50, 100, 250];
+
   private runStats(): void {
     const summary = this.executor.getCompanionSignals();
     const home = this.executor.getHomeProjection();
-    const natural = presentShellStatsResult(summary, home);
+    const stableCount = summary.masteryBreakdown.stable;
+    const stableMilestone = ShellRunner.STABLE_MILESTONES.includes(stableCount)
+      ? stableCount
+      : null;
+    const statsText = presentShellStatsResult(summary, home);
+    const natural = stableMilestone
+      ? `${statsText}\n\n* ${stableMilestone} words stable.`
+      : statsText;
     this.writeAssistantReplyNow(natural);
     this.sessionState.recordActionResult(
       natural,
